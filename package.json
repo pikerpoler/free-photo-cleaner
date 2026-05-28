@@ -8,9 +8,9 @@
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest",
-    "build:ios": "./scripts/build-ios.sh release",
-    "build:ios:simulator": "./scripts/build-ios.sh simulator",
-    "build:android": "./scripts/build-android.sh release",
+    "build:ios": "bash scripts/build-ios.sh release",
+    "build:ios:simulator": "bash scripts/build-ios.sh simulator",
+    "build:android": "bash scripts/build-android.sh release",
     "pods": "cd ios && pod install && cd .."
   },
   "dependencies": {
