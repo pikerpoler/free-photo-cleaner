@@ -42,4 +42,5 @@ export interface StorageInfo {
   freeSpace: number;
   photosSize: number;
   videosSize: number;
+  isFallback?: boolean;
 }

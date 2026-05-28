@@ -12,6 +12,8 @@
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		7EE7244AFC9DF7246825F158 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
+		A1B2C3D71234567800FACADE /* StorageInfoModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D41234567800FACADE /* StorageInfoModule.swift */; };
+		A1B2C3D81234567800FACADE /* StorageInfoModule.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D51234567800FACADE /* StorageInfoModule.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +26,9 @@
 		5DCACB8F33CDC322A6C60F78 /* libPods-FreePhotoCleaner.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-FreePhotoCleaner.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = FreePhotoCleaner/AppDelegate.swift; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = FreePhotoCleaner/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		A1B2C3D41234567800FACADE /* StorageInfoModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StorageInfoModule.swift; path = FreePhotoCleaner/StorageInfoModule.swift; sourceTree = "<group>"; };
+		A1B2C3D51234567800FACADE /* StorageInfoModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = StorageInfoModule.m; path = FreePhotoCleaner/StorageInfoModule.m; sourceTree = "<group>"; };
+		A1B2C3D61234567800FACADE /* FreePhotoCleaner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "FreePhotoCleaner-Bridging-Header.h"; path = "FreePhotoCleaner/FreePhotoCleaner-Bridging-Header.h"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -44,6 +49,9 @@
 			children = (
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				761780EC2CA45674006654EE /* AppDelegate.swift */,
+				A1B2C3D41234567800FACADE /* StorageInfoModule.swift */,
+				A1B2C3D51234567800FACADE /* StorageInfoModule.m */,
+				A1B2C3D61234567800FACADE /* FreePhotoCleaner-Bridging-Header.h */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
@@ -247,6 +255,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				761780ED2CA45674006654EE /* AppDelegate.swift in Sources */,
+				A1B2C3D71234567800FACADE /* StorageInfoModule.swift in Sources */,
+				A1B2C3D81234567800FACADE /* StorageInfoModule.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -263,6 +273,7 @@
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = FreePhotoCleaner/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				SWIFT_OBJC_BRIDGING_HEADER = "FreePhotoCleaner/FreePhotoCleaner-Bridging-Header.h";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -292,6 +303,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = FreePhotoCleaner/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				SWIFT_OBJC_BRIDGING_HEADER = "FreePhotoCleaner/FreePhotoCleaner-Bridging-Header.h";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -425,6 +437,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				COPY_PHASE_STRIP = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -466,7 +479,6 @@
 				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
 				USE_HERMES = true;
 				VALIDATE_PRODUCT = YES;
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 			};
 			name = Release;
 		};

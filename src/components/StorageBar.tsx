@@ -15,6 +15,24 @@ export function StorageBar() {
 
   if (!info) return null;
 
+  if (info.isFallback) {
+    return (
+      <View style={[styles.container, isDark && styles.containerDark]}>
+        <View style={styles.bar}>
+          <View style={[styles.segment, styles.other, {flex: 1}]} />
+        </View>
+        <View style={styles.legend}>
+          <Text style={[styles.legendText, isDark && styles.textDark, styles.fallbackText]}>
+            Storage info unavailable
+          </Text>
+          <Text style={[styles.available, isDark && styles.textDark]}>
+            Available: UNKNOWN
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
   const total = info.totalSpace;
   const photoPct = (info.photosSize / total) * 100;
   const videoPct = (info.videosSize / total) * 100;
@@ -126,5 +144,8 @@ const styles = StyleSheet.create({
     color: '#666',
     marginLeft: 'auto',
     fontWeight: '600',
+  },
+  fallbackText: {
+    fontStyle: 'italic',
   },
 });

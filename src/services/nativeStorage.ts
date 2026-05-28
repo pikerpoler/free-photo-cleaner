@@ -22,6 +22,7 @@ export async function getNativeStorageInfo(): Promise<StorageInfo> {
         freeSpace: result.freeSpace,
         photosSize: result.photosSize,
         videosSize: result.videosSize,
+        isFallback: false,
       };
       cachedStorageInfo = info;
       cacheTimestamp = now;
@@ -63,10 +64,12 @@ export async function batchDeleteAssets(uris: string[]): Promise<{success: boole
 }
 
 function getFallbackStorageInfo(): StorageInfo {
+  console.warn('[FreePhotoCleaner] Using FALLBACK storage info — native module unavailable or errored');
   return {
-    totalSpace: 128 * 1024 * 1024 * 1024,
-    freeSpace: 32 * 1024 * 1024 * 1024,
+    totalSpace: 0,
+    freeSpace: 0,
     photosSize: 0,
     videosSize: 0,
+    isFallback: true,
   };
 }
