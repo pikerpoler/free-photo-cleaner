@@ -120,6 +120,7 @@ Then re-run setup:
 ```sh
 npm install
 cd ios && pod install && cd ..
+echo 'export NODE_BINARY=/opt/homebrew/bin/node' > ios/.xcode.env.local
 ```
 
 ## Project Structure
@@ -139,3 +140,4 @@ scripts/
 ios/                 # Xcode project and native iOS code
 android/             # Android Studio project and native code
 ```
+
