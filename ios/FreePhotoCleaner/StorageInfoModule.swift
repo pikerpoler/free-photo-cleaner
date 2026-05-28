@@ -26,41 +26,31 @@ class StorageInfoModule: NSObject {
           freeSpace = available
         }
       } catch {
+        NSLog("[FreePhotoCleaner] StorageInfo disk space error: %@", error.localizedDescription)
         if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory()) {
           totalSpace = (attrs[.systemSize] as? Int64) ?? 0
           freeSpace = (attrs[.systemFreeSize] as? Int64) ?? 0
         }
       }
 
+      NSLog("[FreePhotoCleaner] StorageInfo: totalSpace=%lld, freeSpace=%lld", totalSpace, freeSpace)
+
       let fetchOptions = PHFetchOptions()
       fetchOptions.includeHiddenAssets = false
       fetchOptions.includeAllBurstAssets = false
 
-      var photosSize: Int64 = 0
-      var videosSize: Int64 = 0
-
       let photoAssets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
       let videoAssets = PHAsset.fetchAssets(with: .video, options: fetchOptions)
 
-      photoAssets.enumerateObjects { (asset, _, _) in
-        let resources = PHAssetResource.assetResources(for: asset)
-        for resource in resources {
-          if let size = resource.value(forKey: "fileSize") as? Int64 {
-            photosSize += size
-            break
-          }
-        }
-      }
+      let photoCount = photoAssets.count
+      let videoCount = videoAssets.count
 
-      videoAssets.enumerateObjects { (asset, _, _) in
-        let resources = PHAssetResource.assetResources(for: asset)
-        for resource in resources {
-          if let size = resource.value(forKey: "fileSize") as? Int64 {
-            videosSize += size
-            break
-          }
-        }
-      }
+      NSLog("[FreePhotoCleaner] StorageInfo: photoCount=%d, videoCount=%d", photoCount, videoCount)
+
+      let photosSize = self.estimateTotalSize(fetchResult: photoAssets, sampleCount: 50)
+      let videosSize = self.estimateTotalSize(fetchResult: videoAssets, sampleCount: 30)
+
+      NSLog("[FreePhotoCleaner] StorageInfo: photosSize=%lld, videosSize=%lld", photosSize, videosSize)
 
       let result: [String: Any] = [
         "totalSpace": NSNumber(value: totalSpace),
@@ -73,6 +63,56 @@ class StorageInfoModule: NSObject {
     }
   }
 
+  private func estimateTotalSize(fetchResult: PHFetchResult<PHAsset>, sampleCount: Int) -> Int64 {
+    let totalCount = fetchResult.count
+    guard totalCount > 0 else { return 0 }
+
+    let samplesToTake = min(sampleCount, totalCount)
+    var sampleSizeSum: Int64 = 0
+    var samplesCollected = 0
+
+    let stride = max(1, totalCount / samplesToTake)
+
+    for i in Swift.stride(from: 0, to: totalCount, by: stride) {
+      if samplesCollected >= samplesToTake { break }
+      let asset = fetchResult.object(at: i)
+      if let size = self.getAssetFileSize(asset) {
+        sampleSizeSum += size
+        samplesCollected += 1
+      }
+    }
+
+    guard samplesCollected > 0 else { return 0 }
+
+    let averageSize = sampleSizeSum / Int64(samplesCollected)
+    return averageSize * Int64(totalCount)
+  }
+
+  private func getAssetFileSize(_ asset: PHAsset) -> Int64? {
+    let resources = PHAssetResource.assetResources(for: asset)
+    guard let primaryResource = resources.first else { return nil }
+
+    if let size = primaryResource.value(forKey: "fileSize") as? Int64, size > 0 {
+      return size
+    }
+    if let size = primaryResource.value(forKey: "fileSize") as? Int, size > 0 {
+      return Int64(size)
+    }
+
+    // Fallback: use estimated file size from asset dimensions and type
+    if asset.mediaType == .image {
+      let pixels = Int64(asset.pixelWidth) * Int64(asset.pixelHeight)
+      // ~3 bytes per pixel for compressed HEIC/JPEG is a reasonable estimate
+      return max(pixels * 3 / 4, 500_000)
+    } else if asset.mediaType == .video {
+      let duration = Int64(asset.duration)
+      // ~5MB per minute for typical video
+      return max(duration * 85_000, 1_000_000)
+    }
+
+    return nil
+  }
+
   @objc
   func batchDelete(_ uris: [String], resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     NSLog("[FreePhotoCleaner] batchDelete called with %d URIs", uris.count)
@@ -82,9 +122,6 @@ class StorageInfoModule: NSObject {
       return
     }
 
-    // Convert ph:// URIs to local identifiers
-    // CameraRoll returns: "ph://ED7AC36B-A150-4C38-BB8C-B6D696F4F2ED/L0/001"
-    // PHAsset localIdentifier is: "ED7AC36B-A150-4C38-BB8C-B6D696F4F2ED/L0/001"
     var localIdentifiers: [String] = []
 
     for uri in uris {
@@ -101,16 +138,13 @@ class StorageInfoModule: NSObject {
       NSLog("[FreePhotoCleaner] First identifier: %@", first)
     }
 
-    // Try fetching with full identifiers first
     let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers, options: nil)
     NSLog("[FreePhotoCleaner] PHAsset.fetchAssets returned %d assets", fetchResult.count)
 
     if fetchResult.count == 0 {
-      // Fallback: try with just the UUID portion (strip /L0/001 suffix)
       NSLog("[FreePhotoCleaner] No assets found, trying UUID-only approach")
       var uuidIdentifiers: [String] = []
       for id in localIdentifiers {
-        // localIdentifier format might just be UUID without path components
         let components = id.components(separatedBy: "/")
         if components.count > 0 {
           uuidIdentifiers.append(components[0])
@@ -121,7 +155,6 @@ class StorageInfoModule: NSObject {
       NSLog("[FreePhotoCleaner] UUID-only fetch returned %d assets", retryResult.count)
 
       if retryResult.count == 0 {
-        // Final attempt: try fetching ALL photos and matching by localIdentifier prefix
         NSLog("[FreePhotoCleaner] Still no assets found. Trying prefix match...")
         let allAssets = PHAsset.fetchAssets(with: nil)
         var matchedAssets: [PHAsset] = []

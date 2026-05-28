@@ -4,21 +4,42 @@ import {StorageInfo} from '../types/media';
 
 const {StorageInfoModule} = NativeModules;
 
+let cachedStorageInfo: StorageInfo | null = null;
+let cacheTimestamp = 0;
+const CACHE_TTL_MS = 60_000;
+
 export async function getNativeStorageInfo(): Promise<StorageInfo> {
+  const now = Date.now();
+  if (cachedStorageInfo && now - cacheTimestamp < CACHE_TTL_MS) {
+    return cachedStorageInfo;
+  }
+
   if (Platform.OS === 'ios' && StorageInfoModule) {
     try {
       const result = await StorageInfoModule.getStorageInfo();
-      return {
+      const info: StorageInfo = {
         totalSpace: result.totalSpace,
         freeSpace: result.freeSpace,
         photosSize: result.photosSize,
         videosSize: result.videosSize,
       };
-    } catch {
+      cachedStorageInfo = info;
+      cacheTimestamp = now;
+      return info;
+    } catch (error: unknown) {
+      console.warn(
+        '[FreePhotoCleaner] getNativeStorageInfo failed:',
+        error instanceof Error ? error.message : String(error),
+      );
       return getFallbackStorageInfo();
     }
   }
   return getFallbackStorageInfo();
+}
+
+export function invalidateStorageCache(): void {
+  cachedStorageInfo = null;
+  cacheTimestamp = 0;
 }
 
 export async function batchDeleteAssets(uris: string[]): Promise<{success: boolean; deletedCount: number}> {
@@ -28,6 +49,7 @@ export async function batchDeleteAssets(uris: string[]): Promise<{success: boole
 
   try {
     await CameraRoll.deletePhotos(uris);
+    invalidateStorageCache();
     return {success: true, deletedCount: uris.length};
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);

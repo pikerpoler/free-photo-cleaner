@@ -7,7 +7,11 @@ import {
   SortMode,
   VideoFilters,
 } from '../types/media';
-import {fetchAllMediaAssets, deleteAsset} from '../services/media';
+import {
+  loadMediaProgressively,
+  deleteAsset,
+  ProgressiveLoadController,
+} from '../services/media';
 import {batchDeleteAssets} from '../services/nativeStorage';
 import {
   getKeptAssetIds,
@@ -39,7 +43,8 @@ interface QueueState {
     sort: SortMode,
     photoFilters?: PhotoFilters,
     videoFilters?: VideoFilters,
-  ) => Promise<void>;
+  ) => void;
+  applySort: (type: MediaType, sort: SortMode) => void;
   swipeLeft: (type: MediaType) => void;
   swipeRight: (type: MediaType) => void;
   undo: (type: MediaType) => void;
@@ -47,6 +52,17 @@ interface QueueState {
   getCurrentAsset: (type: MediaType) => MediaAsset | null;
   getNextAsset: (type: MediaType) => MediaAsset | null;
 }
+
+let photoLoadController: ProgressiveLoadController | null = null;
+let videoLoadController: ProgressiveLoadController | null = null;
+
+let photoRawCache: MediaAsset[] = [];
+let videoRawCache: MediaAsset[] = [];
+
+let currentPhotoSort: SortMode = 'newest_first';
+let currentVideoSort: SortMode = 'largest_first';
+let currentPhotoFilters: PhotoFilters | undefined;
+let currentVideoFilters: VideoFilters | undefined;
 
 function sortAssets(assets: MediaAsset[], mode: SortMode): MediaAsset[] {
   const sorted = [...assets];
@@ -100,6 +116,27 @@ function applyVideoFilters(
   });
 }
 
+function filterAndSort(
+  raw: MediaAsset[],
+  type: MediaType,
+  sort: SortMode,
+  photoFilters?: PhotoFilters,
+  videoFilters?: VideoFilters,
+): MediaAsset[] {
+  const keptIds = getKeptAssetIds();
+  const pendingIds = getPendingDeleteIds();
+
+  let assets = raw.filter(a => !keptIds.has(a.id) && !pendingIds.has(a.id));
+
+  if (type === 'photo' && photoFilters) {
+    assets = applyPhotoFilters(assets, photoFilters);
+  } else if (type === 'video' && videoFilters) {
+    assets = applyVideoFilters(assets, videoFilters);
+  }
+
+  return sortAssets(assets, sort);
+}
+
 export const useQueueStore = create<QueueState>((set, get) => ({
   photoQueue: [],
   videoQueue: [],
@@ -112,33 +149,86 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   photoUndoStack: [],
   videoUndoStack: [],
 
-  loadQueue: async (type, sort, photoFilters, videoFilters) => {
-    const loadingKey =
-      type === 'photo' ? 'isLoadingPhotos' : 'isLoadingVideos';
+  loadQueue: (type, sort, photoFilters, videoFilters) => {
+    const isPhoto = type === 'photo';
+
+    if (isPhoto) {
+      photoLoadController?.cancel();
+      currentPhotoSort = sort;
+      currentPhotoFilters = photoFilters;
+      photoRawCache = [];
+    } else {
+      videoLoadController?.cancel();
+      currentVideoSort = sort;
+      currentVideoFilters = videoFilters;
+      videoRawCache = [];
+    }
+
+    const loadingKey = isPhoto ? 'isLoadingPhotos' : 'isLoadingVideos';
     set({[loadingKey]: true});
 
-    try {
-      let assets = await fetchAllMediaAssets(type);
-      const keptIds = getKeptAssetIds();
-      const pendingIds = getPendingDeleteIds();
+    let isFirstBatch = true;
 
-      assets = assets.filter(a => !keptIds.has(a.id) && !pendingIds.has(a.id));
-
-      if (type === 'photo' && photoFilters) {
-        assets = applyPhotoFilters(assets, photoFilters);
-      } else if (type === 'video' && videoFilters) {
-        assets = applyVideoFilters(assets, videoFilters);
+    const controller = loadMediaProgressively(type, (batch, done) => {
+      if (isPhoto) {
+        photoRawCache = [...photoRawCache, ...batch];
+      } else {
+        videoRawCache = [...videoRawCache, ...batch];
       }
 
-      assets = sortAssets(assets, sort);
+      const rawCache = isPhoto ? photoRawCache : videoRawCache;
+      const currentSort = isPhoto ? currentPhotoSort : currentVideoSort;
+      const pf = isPhoto ? currentPhotoFilters : undefined;
+      const vf = isPhoto ? undefined : currentVideoFilters;
 
-      const queueKey = type === 'photo' ? 'photoQueue' : 'videoQueue';
-      const indexKey = type === 'photo' ? 'photoIndex' : 'videoIndex';
+      const queue = filterAndSort(rawCache, type, currentSort, pf, vf);
+      const queueKey = isPhoto ? 'photoQueue' : 'videoQueue';
 
-      set({[queueKey]: assets, [indexKey]: 0, [loadingKey]: false});
-    } catch {
-      set({[loadingKey]: false});
+      if (isFirstBatch) {
+        isFirstBatch = false;
+        const indexKey = isPhoto ? 'photoIndex' : 'videoIndex';
+        set({[queueKey]: queue, [indexKey]: 0, [loadingKey]: false});
+      } else {
+        const currentIndex = isPhoto ? get().photoIndex : get().videoIndex;
+        set({[queueKey]: queue});
+        // Keep index valid if queue shrunk (shouldn't happen with append)
+        if (currentIndex >= queue.length && queue.length > 0) {
+          const indexKey = isPhoto ? 'photoIndex' : 'videoIndex';
+          set({[indexKey]: queue.length - 1});
+        }
+      }
+
+      if (done) {
+        set({[loadingKey]: false});
+      }
+    });
+
+    if (isPhoto) {
+      photoLoadController = controller;
+    } else {
+      videoLoadController = controller;
     }
+  },
+
+  applySort: (type: MediaType, sort: SortMode) => {
+    const isPhoto = type === 'photo';
+    const rawCache = isPhoto ? photoRawCache : videoRawCache;
+
+    if (isPhoto) {
+      currentPhotoSort = sort;
+    } else {
+      currentVideoSort = sort;
+    }
+
+    if (rawCache.length === 0) return;
+
+    const pf = isPhoto ? currentPhotoFilters : undefined;
+    const vf = isPhoto ? undefined : currentVideoFilters;
+    const queue = filterAndSort(rawCache, type, sort, pf, vf);
+
+    const queueKey = isPhoto ? 'photoQueue' : 'videoQueue';
+    const indexKey = isPhoto ? 'photoIndex' : 'videoIndex';
+    set({[queueKey]: queue, [indexKey]: 0});
   },
 
   swipeLeft: (type: MediaType) => {

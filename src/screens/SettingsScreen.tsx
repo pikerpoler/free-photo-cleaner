@@ -39,6 +39,7 @@ function SortPicker({
           key={opt.value}
           style={[
             styles.sortOption,
+            isDark && styles.sortOptionDark,
             value === opt.value && styles.sortOptionActive,
           ]}
           onPress={() => onChange(opt.value)}>
@@ -113,40 +114,44 @@ export function SettingsScreen() {
       <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
         Photos Filters
       </Text>
-      <View style={styles.row}>
+      <View style={[styles.row, isDark && styles.rowDark]}>
         <Text style={[styles.label, isDark && styles.textDark]}>All Photos</Text>
         <Switch
           value={photoFilters.mode === 'all'}
           onValueChange={v => setPhotoFilters({mode: v ? 'all' : 'categories'})}
+          trackColor={{false: isDark ? '#39393D' : '#e9e9ea', true: '#34C759'}}
         />
       </View>
       {photoFilters.mode === 'categories' && (
         <>
-          <View style={styles.row}>
+          <View style={[styles.row, isDark && styles.rowDark]}>
             <Text style={[styles.label, isDark && styles.textDark]}>
               Screenshots
             </Text>
             <Switch
               value={photoFilters.screenshots}
               onValueChange={v => setPhotoFilters({screenshots: v})}
+              trackColor={{false: isDark ? '#39393D' : '#e9e9ea', true: '#34C759'}}
             />
           </View>
-          <View style={styles.row}>
+          <View style={[styles.row, isDark && styles.rowDark]}>
             <Text style={[styles.label, isDark && styles.textDark]}>
               WhatsApp Images
             </Text>
             <Switch
               value={photoFilters.whatsapp}
               onValueChange={v => setPhotoFilters({whatsapp: v})}
+              trackColor={{false: isDark ? '#39393D' : '#e9e9ea', true: '#34C759'}}
             />
           </View>
-          <View style={styles.row}>
+          <View style={[styles.row, isDark && styles.rowDark]}>
             <Text style={[styles.label, isDark && styles.textDark]}>
               No Metadata
             </Text>
             <Switch
               value={photoFilters.noMetadata}
               onValueChange={v => setPhotoFilters({noMetadata: v})}
+              trackColor={{false: isDark ? '#39393D' : '#e9e9ea', true: '#34C759'}}
             />
           </View>
         </>
@@ -278,6 +283,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#f0f0f0',
   },
+  sortOptionDark: {
+    backgroundColor: '#2c2c2e',
+  },
   sortOptionActive: {
     backgroundColor: '#007AFF',
   },
@@ -296,6 +304,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#e0e0e0',
+  },
+  rowDark: {
+    borderBottomColor: '#3a3a3c',
   },
   label: {
     fontSize: 15,

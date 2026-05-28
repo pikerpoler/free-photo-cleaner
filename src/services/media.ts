@@ -28,8 +28,6 @@ function detectWhatsApp(asset: PhotoIdentifier): boolean {
   if (Platform.OS === 'android') {
     return lower.includes('whatsapp') || /^img-\d+-wa\d+/i.test(filename);
   }
-  // iOS: WhatsApp-saved images often lack distinctive names,
-  // but some saved from WhatsApp have specific patterns
   return lower.includes('whatsapp') || /^img-\d+-wa/i.test(lower);
 }
 
@@ -82,21 +80,45 @@ export async function fetchMediaAssets(
   };
 }
 
-export async function fetchAllMediaAssets(
+export interface ProgressiveLoadController {
+  cancel: () => void;
+}
+
+export type OnBatchLoaded = (
+  assets: MediaAsset[],
+  done: boolean,
+) => void;
+
+/**
+ * Loads media assets progressively, calling onBatch after each page.
+ * Returns a controller with a cancel() method to abort mid-load.
+ */
+export function loadMediaProgressively(
   type: MediaType,
-): Promise<MediaAsset[]> {
-  const allAssets: MediaAsset[] = [];
-  let cursor: string | undefined;
-  let hasMore = true;
+  onBatch: OnBatchLoaded,
+): ProgressiveLoadController {
+  let cancelled = false;
 
-  while (hasMore) {
-    const result = await fetchMediaAssets(type, cursor);
-    allAssets.push(...result.assets);
-    cursor = result.endCursor;
-    hasMore = result.hasMore;
-  }
+  const controller: ProgressiveLoadController = {
+    cancel: () => {
+      cancelled = true;
+    },
+  };
 
-  return allAssets;
+  (async () => {
+    let cursor: string | undefined;
+    let hasMore = true;
+
+    while (hasMore && !cancelled) {
+      const result = await fetchMediaAssets(type, cursor);
+      if (cancelled) return;
+      onBatch(result.assets, !result.hasMore);
+      cursor = result.endCursor;
+      hasMore = result.hasMore;
+    }
+  })();
+
+  return controller;
 }
 
 export async function deleteAsset(uri: string): Promise<boolean> {
@@ -107,4 +129,3 @@ export async function deleteAsset(uri: string): Promise<boolean> {
     return false;
   }
 }
-

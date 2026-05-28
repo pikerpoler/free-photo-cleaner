@@ -26,6 +26,7 @@ export function VideosScreen() {
     videoIndex,
     isLoadingVideos,
     loadQueue,
+    applySort,
     swipeLeft,
     swipeRight,
     undo,
@@ -36,9 +37,26 @@ export function VideosScreen() {
 
   const {videoSort, videoFilters} = useSettingsStore();
 
+  const videoFiltersRef = React.useRef(videoFilters);
+  const isFirstLoad = React.useRef(true);
+
   useEffect(() => {
-    loadQueue('video', videoSort, undefined, videoFilters);
-  }, [videoSort, videoFilters, loadQueue]);
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+      loadQueue('video', videoSort, undefined, videoFilters);
+      return;
+    }
+
+    const filtersChanged =
+      JSON.stringify(videoFilters) !== JSON.stringify(videoFiltersRef.current);
+    videoFiltersRef.current = videoFilters;
+
+    if (filtersChanged) {
+      loadQueue('video', videoSort, undefined, videoFilters);
+    } else {
+      applySort('video', videoSort);
+    }
+  }, [videoSort, videoFilters, loadQueue, applySort]);
 
   const currentAsset = videoQueue[videoIndex];
   const nextAsset = videoQueue[videoIndex + 1] || null;

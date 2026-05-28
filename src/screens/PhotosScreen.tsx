@@ -25,6 +25,7 @@ export function PhotosScreen() {
     photoIndex,
     isLoadingPhotos,
     loadQueue,
+    applySort,
     swipeLeft,
     swipeRight,
     undo,
@@ -35,9 +36,26 @@ export function PhotosScreen() {
 
   const {photoSort, photoFilters} = useSettingsStore();
 
+  const photoFiltersRef = React.useRef(photoFilters);
+  const isFirstLoad = React.useRef(true);
+
   useEffect(() => {
-    loadQueue('photo', photoSort, photoFilters);
-  }, [photoSort, photoFilters, loadQueue]);
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+      loadQueue('photo', photoSort, photoFilters);
+      return;
+    }
+
+    const filtersChanged =
+      JSON.stringify(photoFilters) !== JSON.stringify(photoFiltersRef.current);
+    photoFiltersRef.current = photoFilters;
+
+    if (filtersChanged) {
+      loadQueue('photo', photoSort, photoFilters);
+    } else {
+      applySort('photo', photoSort);
+    }
+  }, [photoSort, photoFilters, loadQueue, applySort]);
 
   const currentAsset = photoQueue[photoIndex];
   const nextAsset = photoQueue[photoIndex + 1] || null;
