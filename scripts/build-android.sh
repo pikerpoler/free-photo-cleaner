@@ -50,7 +50,39 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 
+# ─── NDK sanity check ────────────────────────────────────────────────────────
+
+REQUIRED_NDK_VERSION="27.1.12297006"
+SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
+NDK_HOME="$SDK_ROOT/ndk/$REQUIRED_NDK_VERSION"
+
+if [ ! -f "$NDK_HOME/source.properties" ]; then
+    echo "ERROR: Android NDK $REQUIRED_NDK_VERSION is missing or incomplete."
+    echo "  Expected: $NDK_HOME/source.properties"
+    echo ""
+    echo "Install the required NDK (Android Studio → SDK Manager → SDK Tools → NDK), or run:"
+    echo "  sdkmanager \"ndk;$REQUIRED_NDK_VERSION\""
+    echo ""
+    if [ -d "$SDK_ROOT/ndk" ]; then
+        echo "Installed NDK folders under $SDK_ROOT/ndk:"
+        for ndk_dir in "$SDK_ROOT/ndk"/*; do
+            [ -d "$ndk_dir" ] || continue
+            if [ -f "$ndk_dir/source.properties" ]; then
+                echo "  OK  $(basename "$ndk_dir")"
+            else
+                echo "  BAD $(basename "$ndk_dir") (incomplete — remove or reinstall)"
+            fi
+        done
+    fi
+    exit 1
+fi
+
 cd "$PROJECT_ROOT/android"
+
+# macOS quarantine (e.g. project copied via AirDrop/WhatsApp) blocks executing gradlew
+if [ "$(uname)" = "Darwin" ] && [ -f ./gradlew ]; then
+    xattr -d com.apple.quarantine ./gradlew 2>/dev/null || true
+fi
 
 if [ "$BUILD_TYPE" = "release" ]; then
     echo "[1/3] Cleaning previous build..."
