@@ -34,6 +34,8 @@ interface QueueState {
   videoIndex: number;
   isLoadingPhotos: boolean;
   isLoadingVideos: boolean;
+  isLoadingPhotosMore: boolean;
+  isLoadingVideosMore: boolean;
   photoPendingCount: number;
   videoPendingCount: number;
   photoUndoStack: UndoEntry[];
@@ -166,6 +168,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   videoIndex: 0,
   isLoadingPhotos: false,
   isLoadingVideos: false,
+  isLoadingPhotosMore: false,
+  isLoadingVideosMore: false,
   photoPendingCount: getPendingDeletesByType('photo').length,
   videoPendingCount: getPendingDeletesByType('video').length,
   photoUndoStack: [],
@@ -188,7 +192,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     currentDateFilter = dateFilter;
 
     const loadingKey = isPhoto ? 'isLoadingPhotos' : 'isLoadingVideos';
-    set({[loadingKey]: true});
+    const loadingMoreKey = isPhoto ? 'isLoadingPhotosMore' : 'isLoadingVideosMore';
+    set({[loadingKey]: true, [loadingMoreKey]: false});
 
     let isFirstBatch = true;
 
@@ -203,27 +208,29 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       const currentSort = isPhoto ? currentPhotoSort : currentVideoSort;
       const pf = isPhoto ? currentPhotoFilters : undefined;
       const vf = isPhoto ? undefined : currentVideoFilters;
-
-      const queue = filterAndSort(rawCache, type, currentSort, pf, vf, currentDateFilter);
       const queueKey = isPhoto ? 'photoQueue' : 'videoQueue';
 
       if (isFirstBatch) {
         isFirstBatch = false;
+        const queue = filterAndSort(rawCache, type, currentSort, pf, vf, currentDateFilter);
         const indexKey = isPhoto ? 'photoIndex' : 'videoIndex';
-        set({[queueKey]: queue, [indexKey]: 0, [loadingKey]: false});
-      } else {
+        set({
+          [queueKey]: queue,
+          [indexKey]: 0,
+          [loadingKey]: false,
+          [loadingMoreKey]: !done,
+        });
+      } else if (done) {
+        // All batches loaded -- merge remainder behind the user's current position
+        const currentQueue = isPhoto ? get().photoQueue : get().videoQueue;
         const currentIndex = isPhoto ? get().photoIndex : get().videoIndex;
-        set({[queueKey]: queue});
-        // Keep index valid if queue shrunk (shouldn't happen with append)
-        if (currentIndex >= queue.length && queue.length > 0) {
-          const indexKey = isPhoto ? 'photoIndex' : 'videoIndex';
-          set({[indexKey]: queue.length - 1});
-        }
+        const frozenPrefix = currentQueue.slice(0, currentIndex + 1);
+        const frozenIds = new Set(frozenPrefix.map(a => a.id));
+        const unfrozenRaw = rawCache.filter(a => !frozenIds.has(a.id));
+        const remainder = filterAndSort(unfrozenRaw, type, currentSort, pf, vf, currentDateFilter);
+        set({[queueKey]: [...frozenPrefix, ...remainder], [loadingMoreKey]: false});
       }
-
-      if (done) {
-        set({[loadingKey]: false});
-      }
+      // Intermediate batches: silently accumulate in rawCache, no queue update
     });
 
     if (isPhoto) {

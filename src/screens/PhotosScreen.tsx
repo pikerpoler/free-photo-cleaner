@@ -24,6 +24,7 @@ export function PhotosScreen() {
     photoQueue,
     photoIndex,
     isLoadingPhotos,
+    isLoadingPhotosMore,
     loadQueue,
     applySort,
     swipeLeft,
@@ -105,6 +106,17 @@ export function PhotosScreen() {
   }
 
   if (!currentAsset) {
+    if (isLoadingPhotosMore) {
+      return (
+        <View style={[styles.center, isDark && styles.bgDark]}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <Text style={[styles.loadingText, isDark && styles.textDark]}>
+            Loading more photos...
+          </Text>
+        </View>
+      );
+    }
+
     return (
       <View style={[styles.center, isDark && styles.bgDark]}>
         <Text style={[styles.emptyTitle, isDark && styles.textDark]}>

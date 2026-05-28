@@ -25,6 +25,7 @@ export function VideosScreen() {
     videoQueue,
     videoIndex,
     isLoadingVideos,
+    isLoadingVideosMore,
     loadQueue,
     applySort,
     swipeLeft,
@@ -106,6 +107,17 @@ export function VideosScreen() {
   }
 
   if (!currentAsset) {
+    if (isLoadingVideosMore) {
+      return (
+        <View style={[styles.center, isDark && styles.bgDark]}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <Text style={[styles.loadingText, isDark && styles.textDark]}>
+            Loading more videos...
+          </Text>
+        </View>
+      );
+    }
+
     return (
       <View style={[styles.center, isDark && styles.bgDark]}>
         <Text style={[styles.emptyTitle, isDark && styles.textDark]}>
