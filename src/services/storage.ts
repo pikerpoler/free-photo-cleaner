@@ -7,6 +7,7 @@ const KEYS = {
   VIDEO_SORT: 'settings.video.sort',
   PHOTO_FILTERS: 'settings.photo.filters',
   VIDEO_FILTERS: 'settings.video.filters',
+  DATE_FILTER: 'settings.date.filter',
   THEME: 'settings.theme',
 } as const;
 

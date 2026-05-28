@@ -1,6 +1,7 @@
 import {create} from 'zustand';
 import {Alert, Platform} from 'react-native';
 import {
+  DateFilter,
   MediaAsset,
   MediaType,
   PhotoFilters,
@@ -43,6 +44,7 @@ interface QueueState {
     sort: SortMode,
     photoFilters?: PhotoFilters,
     videoFilters?: VideoFilters,
+    dateFilter?: DateFilter,
   ) => void;
   applySort: (type: MediaType, sort: SortMode) => void;
   swipeLeft: (type: MediaType) => void;
@@ -63,6 +65,7 @@ let currentPhotoSort: SortMode = 'newest_first';
 let currentVideoSort: SortMode = 'largest_first';
 let currentPhotoFilters: PhotoFilters | undefined;
 let currentVideoFilters: VideoFilters | undefined;
+let currentDateFilter: DateFilter | undefined;
 
 function sortAssets(assets: MediaAsset[], mode: SortMode): MediaAsset[] {
   const sorted = [...assets];
@@ -82,6 +85,20 @@ function sortAssets(assets: MediaAsset[], mode: SortMode): MediaAsset[] {
     case 'newest_first':
       return sorted.sort((a, b) => b.creationDate - a.creationDate);
   }
+}
+
+function applyDateFilter(
+  assets: MediaAsset[],
+  dateFilter: DateFilter,
+): MediaAsset[] {
+  if (!dateFilter.enabled) return assets;
+  const startOfFrom = new Date(dateFilter.from);
+  startOfFrom.setHours(0, 0, 0, 0);
+  const endOfTo = new Date(dateFilter.to);
+  endOfTo.setHours(23, 59, 59, 999);
+  return assets.filter(
+    a => a.creationDate >= startOfFrom.getTime() && a.creationDate <= endOfTo.getTime(),
+  );
 }
 
 function applyPhotoFilters(
@@ -122,11 +139,16 @@ function filterAndSort(
   sort: SortMode,
   photoFilters?: PhotoFilters,
   videoFilters?: VideoFilters,
+  dateFilter?: DateFilter,
 ): MediaAsset[] {
   const keptIds = getKeptAssetIds();
   const pendingIds = getPendingDeleteIds();
 
   let assets = raw.filter(a => !keptIds.has(a.id) && !pendingIds.has(a.id));
+
+  if (dateFilter) {
+    assets = applyDateFilter(assets, dateFilter);
+  }
 
   if (type === 'photo' && photoFilters) {
     assets = applyPhotoFilters(assets, photoFilters);
@@ -149,7 +171,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   photoUndoStack: [],
   videoUndoStack: [],
 
-  loadQueue: (type, sort, photoFilters, videoFilters) => {
+  loadQueue: (type, sort, photoFilters, videoFilters, dateFilter) => {
     const isPhoto = type === 'photo';
 
     if (isPhoto) {
@@ -163,6 +185,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       currentVideoFilters = videoFilters;
       videoRawCache = [];
     }
+    currentDateFilter = dateFilter;
 
     const loadingKey = isPhoto ? 'isLoadingPhotos' : 'isLoadingVideos';
     set({[loadingKey]: true});
@@ -181,7 +204,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       const pf = isPhoto ? currentPhotoFilters : undefined;
       const vf = isPhoto ? undefined : currentVideoFilters;
 
-      const queue = filterAndSort(rawCache, type, currentSort, pf, vf);
+      const queue = filterAndSort(rawCache, type, currentSort, pf, vf, currentDateFilter);
       const queueKey = isPhoto ? 'photoQueue' : 'videoQueue';
 
       if (isFirstBatch) {
@@ -224,7 +247,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
     const pf = isPhoto ? currentPhotoFilters : undefined;
     const vf = isPhoto ? undefined : currentVideoFilters;
-    const queue = filterAndSort(rawCache, type, sort, pf, vf);
+    const queue = filterAndSort(rawCache, type, sort, pf, vf, currentDateFilter);
 
     const queueKey = isPhoto ? 'photoQueue' : 'videoQueue';
     const indexKey = isPhoto ? 'photoIndex' : 'videoIndex';

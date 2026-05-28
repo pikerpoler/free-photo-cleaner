@@ -35,28 +35,32 @@ export function VideosScreen() {
     videoPendingCount,
   } = useQueueStore();
 
-  const {videoSort, videoFilters} = useSettingsStore();
+  const {videoSort, videoFilters, dateFilter} = useSettingsStore();
 
   const videoFiltersRef = React.useRef(videoFilters);
+  const dateFilterRef = React.useRef(dateFilter);
   const isFirstLoad = React.useRef(true);
 
   useEffect(() => {
     if (isFirstLoad.current) {
       isFirstLoad.current = false;
-      loadQueue('video', videoSort, undefined, videoFilters);
+      loadQueue('video', videoSort, undefined, videoFilters, dateFilter);
       return;
     }
 
     const filtersChanged =
       JSON.stringify(videoFilters) !== JSON.stringify(videoFiltersRef.current);
+    const dateChanged =
+      JSON.stringify(dateFilter) !== JSON.stringify(dateFilterRef.current);
     videoFiltersRef.current = videoFilters;
+    dateFilterRef.current = dateFilter;
 
-    if (filtersChanged) {
-      loadQueue('video', videoSort, undefined, videoFilters);
+    if (filtersChanged || dateChanged) {
+      loadQueue('video', videoSort, undefined, videoFilters, dateFilter);
     } else {
       applySort('video', videoSort);
     }
-  }, [videoSort, videoFilters, loadQueue, applySort]);
+  }, [videoSort, videoFilters, dateFilter, loadQueue, applySort]);
 
   const currentAsset = videoQueue[videoIndex];
   const nextAsset = videoQueue[videoIndex + 1] || null;

@@ -1,6 +1,7 @@
-import React, {useCallback} from 'react';
+import React, {useCallback, useState} from 'react';
 import {
   Alert,
+  Platform,
   ScrollView,
   StyleSheet,
   Switch,
@@ -10,6 +11,9 @@ import {
   useColorScheme,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
+import DateTimePicker, {
+  DateTimePickerEvent,
+} from '@react-native-community/datetimepicker';
 import {useSettingsStore} from '../stores/settingsStore';
 import {resetKeepHistory} from '../services/database';
 import {SortMode} from '../types/media';
@@ -66,11 +70,16 @@ export function SettingsScreen() {
     videoSort,
     photoFilters,
     videoFilters,
+    dateFilter,
     setPhotoSort,
     setVideoSort,
     setPhotoFilters,
     setVideoFilters,
+    setDateFilter,
   } = useSettingsStore();
+
+  const [showFromPicker, setShowFromPicker] = useState(false);
+  const [showToPicker, setShowToPicker] = useState(false);
 
   const handleResetKeepHistory = useCallback(() => {
     Alert.alert(
@@ -88,6 +97,38 @@ export function SettingsScreen() {
   }, []);
 
 
+  const handleFromChange = useCallback(
+    (event: DateTimePickerEvent, selectedDate?: Date) => {
+      if (Platform.OS === 'android') {
+        setShowFromPicker(false);
+      }
+      if (selectedDate) {
+        setDateFilter({from: selectedDate.getTime()});
+      }
+    },
+    [setDateFilter],
+  );
+
+  const handleToChange = useCallback(
+    (event: DateTimePickerEvent, selectedDate?: Date) => {
+      if (Platform.OS === 'android') {
+        setShowToPicker(false);
+      }
+      if (selectedDate) {
+        setDateFilter({to: selectedDate.getTime()});
+      }
+    },
+    [setDateFilter],
+  );
+
+  const formatShortDate = (timestamp: number) => {
+    return new Date(timestamp).toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+
   // Duration slider: 0 to 600s (10 min), with Infinity as max
   const maxDurationDisplay =
     videoFilters.maxDuration === Infinity
@@ -104,6 +145,70 @@ export function SettingsScreen() {
     <ScrollView
       style={[styles.container, isDark && styles.bgDark]}
       contentContainerStyle={styles.content}>
+      {/* Date Range Filter */}
+      <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
+        Date Range
+      </Text>
+      <View style={[styles.row, isDark && styles.rowDark]}>
+        <Text style={[styles.label, isDark && styles.textDark]}>
+          Filter by Date
+        </Text>
+        <Switch
+          value={dateFilter.enabled}
+          onValueChange={v => setDateFilter({enabled: v})}
+          trackColor={{false: isDark ? '#39393D' : '#e9e9ea', true: '#34C759'}}
+        />
+      </View>
+      {dateFilter.enabled && (
+        <>
+          <View style={[styles.row, isDark && styles.rowDark]}>
+            <Text style={[styles.label, isDark && styles.textDark]}>From</Text>
+            <TouchableOpacity
+              style={[styles.dateButton, isDark && styles.dateButtonDark]}
+              onPress={() => {
+                setShowFromPicker(v => !v);
+                setShowToPicker(false);
+              }}>
+              <Text style={[styles.dateButtonText, isDark && styles.textDark]}>
+                {formatShortDate(dateFilter.from)}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {showFromPicker && (
+            <DateTimePicker
+              value={new Date(dateFilter.from)}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'inline' : 'default'}
+              maximumDate={new Date(dateFilter.to)}
+              onChange={handleFromChange}
+            />
+          )}
+          <View style={[styles.row, isDark && styles.rowDark]}>
+            <Text style={[styles.label, isDark && styles.textDark]}>To</Text>
+            <TouchableOpacity
+              style={[styles.dateButton, isDark && styles.dateButtonDark]}
+              onPress={() => {
+                setShowToPicker(v => !v);
+                setShowFromPicker(false);
+              }}>
+              <Text style={[styles.dateButtonText, isDark && styles.textDark]}>
+                {formatShortDate(dateFilter.to)}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {showToPicker && (
+            <DateTimePicker
+              value={new Date(dateFilter.to)}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'inline' : 'default'}
+              minimumDate={new Date(dateFilter.from)}
+              maximumDate={new Date()}
+              onChange={handleToChange}
+            />
+          )}
+        </>
+      )}
+
       {/* Photo Sort */}
       <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
         Photos Sort
@@ -331,6 +436,19 @@ const styles = StyleSheet.create({
   slider: {
     flex: 1,
     height: 32,
+  },
+  dateButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#f0f0f0',
+  },
+  dateButtonDark: {
+    backgroundColor: '#2c2c2e',
+  },
+  dateButtonText: {
+    fontSize: 14,
+    color: '#333',
   },
   actionButton: {
     marginTop: 12,

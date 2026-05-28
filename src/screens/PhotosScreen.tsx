@@ -34,28 +34,32 @@ export function PhotosScreen() {
     photoPendingCount,
   } = useQueueStore();
 
-  const {photoSort, photoFilters} = useSettingsStore();
+  const {photoSort, photoFilters, dateFilter} = useSettingsStore();
 
   const photoFiltersRef = React.useRef(photoFilters);
+  const dateFilterRef = React.useRef(dateFilter);
   const isFirstLoad = React.useRef(true);
 
   useEffect(() => {
     if (isFirstLoad.current) {
       isFirstLoad.current = false;
-      loadQueue('photo', photoSort, photoFilters);
+      loadQueue('photo', photoSort, photoFilters, undefined, dateFilter);
       return;
     }
 
     const filtersChanged =
       JSON.stringify(photoFilters) !== JSON.stringify(photoFiltersRef.current);
+    const dateChanged =
+      JSON.stringify(dateFilter) !== JSON.stringify(dateFilterRef.current);
     photoFiltersRef.current = photoFilters;
+    dateFilterRef.current = dateFilter;
 
-    if (filtersChanged) {
-      loadQueue('photo', photoSort, photoFilters);
+    if (filtersChanged || dateChanged) {
+      loadQueue('photo', photoSort, photoFilters, undefined, dateFilter);
     } else {
       applySort('photo', photoSort);
     }
-  }, [photoSort, photoFilters, loadQueue, applySort]);
+  }, [photoSort, photoFilters, dateFilter, loadQueue, applySort]);
 
   const currentAsset = photoQueue[photoIndex];
   const nextAsset = photoQueue[photoIndex + 1] || null;

@@ -16,6 +16,7 @@
   "dependencies": {
     "@op-engineering/op-sqlite": "^16.2.0",
     "@react-native-camera-roll/camera-roll": "^7.10.2",
+    "@react-native-community/datetimepicker": "^9.1.0",
     "@react-native-community/slider": "^5.2.0",
     "@react-native/new-app-screen": "0.85.3",
     "@react-navigation/bottom-tabs": "^7.16.2",

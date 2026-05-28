@@ -37,6 +37,12 @@ export interface VideoFilters {
   maxSize: number; // bytes, Infinity for no limit
 }
 
+export interface DateFilter {
+  enabled: boolean;
+  from: number; // Unix ms timestamp
+  to: number; // Unix ms timestamp
+}
+
 export interface StorageInfo {
   totalSpace: number;
   freeSpace: number;

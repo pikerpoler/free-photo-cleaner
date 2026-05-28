@@ -1,5 +1,5 @@
 import {create} from 'zustand';
-import {PhotoFilters, SortMode, VideoFilters} from '../types/media';
+import {DateFilter, PhotoFilters, SortMode, VideoFilters} from '../types/media';
 import {getSetting, setSetting, KEYS} from '../services/storage';
 
 interface SettingsState {
@@ -7,12 +7,14 @@ interface SettingsState {
   videoSort: SortMode;
   photoFilters: PhotoFilters;
   videoFilters: VideoFilters;
+  dateFilter: DateFilter;
   theme: 'system' | 'light' | 'dark';
 
   setPhotoSort: (sort: SortMode) => void;
   setVideoSort: (sort: SortMode) => void;
   setPhotoFilters: (filters: Partial<PhotoFilters>) => void;
   setVideoFilters: (filters: Partial<VideoFilters>) => void;
+  setDateFilter: (filter: Partial<DateFilter>) => void;
   setTheme: (theme: 'system' | 'light' | 'dark') => void;
   loadSettings: () => void;
 }
@@ -31,11 +33,18 @@ const DEFAULT_VIDEO_FILTERS: VideoFilters = {
   maxSize: Infinity,
 };
 
+function getDefaultDateFilter(): DateFilter {
+  const now = Date.now();
+  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+  return {enabled: false, from: thirtyDaysAgo, to: now};
+}
+
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   photoSort: 'newest_first',
   videoSort: 'largest_first',
   photoFilters: DEFAULT_PHOTO_FILTERS,
   videoFilters: DEFAULT_VIDEO_FILTERS,
+  dateFilter: getDefaultDateFilter(),
   theme: 'system',
 
   setPhotoSort: (sort: SortMode) => {
@@ -62,6 +71,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     setSetting(KEYS.VIDEO_FILTERS, updated);
   },
 
+  setDateFilter: (filter: Partial<DateFilter>) => {
+    const current = get().dateFilter;
+    const updated = {...current, ...filter};
+    if (updated.from > updated.to) {
+      updated.to = updated.from;
+    }
+    set({dateFilter: updated});
+    setSetting(KEYS.DATE_FILTER, updated);
+  },
+
   setTheme: (theme: 'system' | 'light' | 'dark') => {
     set({theme});
     setSetting(KEYS.THEME, theme);
@@ -73,6 +92,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       videoSort: getSetting(KEYS.VIDEO_SORT, 'largest_first' as SortMode),
       photoFilters: getSetting(KEYS.PHOTO_FILTERS, DEFAULT_PHOTO_FILTERS),
       videoFilters: getSetting(KEYS.VIDEO_FILTERS, DEFAULT_VIDEO_FILTERS),
+      dateFilter: getSetting(KEYS.DATE_FILTER, getDefaultDateFilter()),
       theme: getSetting(KEYS.THEME, 'system' as const),
     });
   },
