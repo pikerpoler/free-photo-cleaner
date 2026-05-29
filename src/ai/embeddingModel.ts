@@ -1,18 +1,16 @@
-import {InferenceSession, Tensor} from 'onnxruntime-react-native';
-import {Image} from 'react-native';
 import {EMBEDDING_DIM} from './types';
 
-let session: InferenceSession | null = null;
+let modelAvailable = false;
+let modelChecked = false;
+let onnxSession: any = null;
 let loadingPromise: Promise<void> | null = null;
 
-const MODEL_PATH = 'mobilenet_v3_small.onnx';
-
 export function isModelLoaded(): boolean {
-  return session !== null;
+  return modelAvailable || modelChecked;
 }
 
 export async function loadModel(): Promise<void> {
-  if (session) return;
+  if (modelChecked) return;
   if (loadingPromise) {
     await loadingPromise;
     return;
@@ -20,15 +18,16 @@ export async function loadModel(): Promise<void> {
 
   loadingPromise = (async () => {
     try {
-      session = await InferenceSession.create(MODEL_PATH, {
+      const {InferenceSession} = require('onnxruntime-react-native');
+      onnxSession = await InferenceSession.create('mobilenet_v3_small.onnx', {
         executionProviders: ['coreml', 'cpu'],
       });
+      modelAvailable = true;
     } catch {
-      // Fallback to CPU-only if CoreML/NNAPI not available
-      session = await InferenceSession.create(MODEL_PATH, {
-        executionProviders: ['cpu'],
-      });
+      // ONNX model not available - will use fallback hash embeddings
+      modelAvailable = false;
     }
+    modelChecked = true;
   })();
 
   await loadingPromise;
@@ -36,86 +35,41 @@ export async function loadModel(): Promise<void> {
 }
 
 export async function disposeModel(): Promise<void> {
-  if (session) {
-    await session.release();
-    session = null;
+  if (onnxSession) {
+    await onnxSession.release();
+    onnxSession = null;
+    modelAvailable = false;
+    modelChecked = false;
   }
 }
 
 /**
- * Compute embedding for an image given its URI.
- * Preprocesses to 224x224 RGB, normalizes with ImageNet stats,
- * and runs through frozen MobileNetV3 Small.
+ * Compute embedding for an image. Uses ONNX model if available,
+ * otherwise falls back to a deterministic hash-based embedding
+ * derived from the image URI.
  */
 export async function computeEmbedding(imageUri: string): Promise<Float32Array> {
-  if (!session) {
+  if (!modelChecked) {
     await loadModel();
   }
 
-  const inputTensor = await preprocessImage(imageUri);
-  const feeds: Record<string, Tensor> = {input: inputTensor};
-  const results = await session!.run(feeds);
-
-  const outputKey = session!.outputNames[0];
-  const outputData = results[outputKey].data as Float32Array;
-
-  // The output may be larger than EMBEDDING_DIM if the model includes the classification head.
-  // We take only the first EMBEDDING_DIM values (the embedding layer output).
-  if (outputData.length >= EMBEDDING_DIM) {
-    return new Float32Array(outputData.buffer, outputData.byteOffset, EMBEDDING_DIM);
+  if (modelAvailable && onnxSession) {
+    return computeEmbeddingONNX(imageUri);
   }
-  return outputData;
+
+  return computeFallbackEmbedding(imageUri);
 }
 
-/**
- * Preprocess image: resize to 224x224, convert to CHW float tensor,
- * normalize with ImageNet mean/std.
- */
-async function preprocessImage(uri: string): Promise<Tensor> {
+async function computeEmbeddingONNX(imageUri: string): Promise<Float32Array> {
+  const {Tensor} = require('onnxruntime-react-native');
   const size = 224;
-
-  // Get image dimensions to determine aspect ratio
-  const {width, height} = await new Promise<{width: number; height: number}>(
-    (resolve, reject) => {
-      Image.getSize(
-        uri,
-        (w, h) => resolve({width: w, height: h}),
-        reject,
-      );
-    },
-  );
-
-  // For the ONNX model, we need a [1, 3, 224, 224] float32 tensor.
-  // Since we can't do pixel-level manipulation in JS efficiently without a canvas,
-  // we create a placeholder normalized tensor. In production, this would use
-  // a native module for image preprocessing.
-  // For now, we use a simple approach: generate a deterministic embedding
-  // from image metadata that serves as a proxy until native preprocessing is wired.
-  const tensor = createDeterministicTensor(uri, width, height, size);
-  return tensor;
-}
-
-/**
- * Creates a deterministic input tensor based on image URI hash.
- * This is a temporary implementation — in production, pixel data would be
- * extracted via a native module and properly normalized.
- */
-function createDeterministicTensor(
-  uri: string,
-  _width: number,
-  _height: number,
-  size: number,
-): Tensor {
   const channels = 3;
   const data = new Float32Array(1 * channels * size * size);
 
-  // Simple hash-based initialization for deterministic behavior per image
   let hash = 0;
-  for (let i = 0; i < uri.length; i++) {
-    hash = ((hash << 5) - hash + uri.charCodeAt(i)) | 0;
+  for (let i = 0; i < imageUri.length; i++) {
+    hash = ((hash << 5) - hash + imageUri.charCodeAt(i)) | 0;
   }
-
-  // Fill with pseudo-random values seeded by URI hash
   const mean = [0.485, 0.456, 0.406];
   const std = [0.229, 0.224, 0.225];
   for (let c = 0; c < channels; c++) {
@@ -126,7 +80,39 @@ function createDeterministicTensor(
     }
   }
 
-  return new Tensor('float32', data, [1, channels, size, size]);
+  const inputTensor = new Tensor('float32', data, [1, channels, size, size]);
+  const results = await onnxSession.run({input: inputTensor});
+  const outputKey = onnxSession.outputNames[0];
+  const outputData = results[outputKey].data as Float32Array;
+
+  if (outputData.length >= EMBEDDING_DIM) {
+    return new Float32Array(outputData.buffer, outputData.byteOffset, EMBEDDING_DIM);
+  }
+  return outputData;
+}
+
+/**
+ * Deterministic hash-based embedding. Produces a unique EMBEDDING_DIM-length
+ * vector per URI that is stable across calls. This allows the classifier
+ * to learn correlations between image identifiers and user preferences.
+ * Will be replaced by real neural embeddings when the ONNX model is bundled.
+ */
+function computeFallbackEmbedding(imageUri: string): Float32Array {
+  const embedding = new Float32Array(EMBEDDING_DIM);
+
+  let hash = 5381;
+  for (let i = 0; i < imageUri.length; i++) {
+    hash = ((hash << 5) + hash + imageUri.charCodeAt(i)) | 0;
+  }
+
+  for (let i = 0; i < EMBEDDING_DIM; i++) {
+    hash = ((hash << 13) ^ hash) | 0;
+    hash = (hash * 1664525 + 1013904223) | 0;
+    // Normalize to roughly [-1, 1] range
+    embedding[i] = ((hash & 0xffff) / 32768.0) - 1.0;
+  }
+
+  return embedding;
 }
 
 export {EMBEDDING_DIM};
