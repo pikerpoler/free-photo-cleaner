@@ -67,7 +67,7 @@ export function getTrainerState(): TrainerState {
 }
 
 export function getQueueSize(): number {
-  return trainerState.queue.length;
+  return trainerState.queue.length + trainerState.processedInBatch;
 }
 
 export function enqueueTraining(entry: TrainingEntry): void {
@@ -159,6 +159,7 @@ async function processNext(): Promise<void> {
   if (trainerState.processedInBatch >= batchSize && trainerState.gradients) {
     sgdStep(currentWeights, trainerState.gradients, stepSize);
     await saveWeights(currentModelSize, currentWeights);
+    console.log(`[AI] SGD step complete (model=${currentModelSize}, lr=${stepSize})`);
     trainerState.processedInBatch = 0;
     zeroGradients(trainerState.gradients);
     onStateChange?.();
@@ -189,7 +190,6 @@ async function processOneItem(): Promise<void> {
       embedding = await computeEmbedding(entry.assetId);
       setCachedEmbedding(entry.assetId, embedding);
     } catch {
-      // If embedding computation fails, skip this item
       onStateChange?.();
       return;
     }
@@ -199,5 +199,10 @@ async function processOneItem(): Promise<void> {
   const fwdResult = forward(currentWeights, embedding);
   backward(currentWeights, trainerState.gradients, fwdResult, entry.label);
   trainerState.processedInBatch++;
+
+  console.log(
+    `[AI] Trained item (label=${entry.label}, p=${fwdResult.output.toFixed(3)}, batch=${trainerState.processedInBatch}/${batchSize}, queue=${trainerState.queue.length})`,
+  );
+
   onStateChange?.();
 }
