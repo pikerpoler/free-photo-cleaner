@@ -5,7 +5,7 @@ let db: DB | null = null;
 export function getDatabase(): DB {
   if (db) return db;
 
-  db = open({name: 'freephotocleaner.db'});
+  db = open({name: 'aiphotocleaner.db'});
 
   db.executeSync(`
     CREATE TABLE IF NOT EXISTS kept_assets (
@@ -22,6 +22,14 @@ export function getDatabase(): DB {
       file_size INTEGER,
       media_type TEXT NOT NULL,
       added_at INTEGER NOT NULL
+    )
+  `);
+
+  db.executeSync(`
+    CREATE TABLE IF NOT EXISTS embedding_cache (
+      asset_id TEXT PRIMARY KEY,
+      embedding BLOB NOT NULL,
+      computed_at INTEGER NOT NULL
     )
   `);
 

@@ -77,9 +77,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.freephotocleaner"
+    namespace "com.aiphotocleaner"
     defaultConfig {
-        applicationId "com.freephotocleaner"
+        applicationId "com.aiphotocleaner"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

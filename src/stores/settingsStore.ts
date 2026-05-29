@@ -1,5 +1,11 @@
 import {create} from 'zustand';
-import {DateFilter, PhotoFilters, SortMode, VideoFilters} from '../types/media';
+import {
+  AIModelSize,
+  DateFilter,
+  PhotoFilters,
+  SortMode,
+  VideoFilters,
+} from '../types/media';
 import {getSetting, setSetting, KEYS} from '../services/storage';
 
 interface SettingsState {
@@ -9,6 +15,10 @@ interface SettingsState {
   videoFilters: VideoFilters;
   dateFilter: DateFilter;
   theme: 'system' | 'light' | 'dark';
+  trainAI: boolean;
+  aiModel: AIModelSize;
+  aiBatchSize: number;
+  aiStepSize: number;
 
   setPhotoSort: (sort: SortMode) => void;
   setVideoSort: (sort: SortMode) => void;
@@ -16,6 +26,10 @@ interface SettingsState {
   setVideoFilters: (filters: Partial<VideoFilters>) => void;
   setDateFilter: (filter: Partial<DateFilter>) => void;
   setTheme: (theme: 'system' | 'light' | 'dark') => void;
+  setTrainAI: (enabled: boolean) => void;
+  setAIModel: (model: AIModelSize) => void;
+  setAIBatchSize: (size: number) => void;
+  setAIStepSize: (rate: number) => void;
   loadSettings: () => void;
 }
 
@@ -46,6 +60,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   videoFilters: DEFAULT_VIDEO_FILTERS,
   dateFilter: getDefaultDateFilter(),
   theme: 'system',
+  trainAI: true,
+  aiModel: 'tiny',
+  aiBatchSize: 10,
+  aiStepSize: 0.01,
 
   setPhotoSort: (sort: SortMode) => {
     set({photoSort: sort});
@@ -86,6 +104,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     setSetting(KEYS.THEME, theme);
   },
 
+  setTrainAI: (enabled: boolean) => {
+    set({trainAI: enabled});
+    setSetting(KEYS.TRAIN_AI, enabled);
+  },
+
+  setAIModel: (model: AIModelSize) => {
+    set({aiModel: model});
+    setSetting(KEYS.AI_MODEL, model);
+  },
+
+  setAIBatchSize: (size: number) => {
+    set({aiBatchSize: size});
+    setSetting(KEYS.AI_BATCH_SIZE, size);
+  },
+
+  setAIStepSize: (rate: number) => {
+    set({aiStepSize: rate});
+    setSetting(KEYS.AI_STEP_SIZE, rate);
+  },
+
   loadSettings: () => {
     set({
       photoSort: getSetting(KEYS.PHOTO_SORT, 'newest_first' as SortMode),
@@ -94,6 +132,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       videoFilters: getSetting(KEYS.VIDEO_FILTERS, DEFAULT_VIDEO_FILTERS),
       dateFilter: getSetting(KEYS.DATE_FILTER, getDefaultDateFilter()),
       theme: getSetting(KEYS.THEME, 'system' as const),
+      trainAI: getSetting(KEYS.TRAIN_AI, true),
+      aiModel: getSetting(KEYS.AI_MODEL, 'tiny' as AIModelSize),
+      aiBatchSize: getSetting(KEYS.AI_BATCH_SIZE, 10),
+      aiStepSize: getSetting(KEYS.AI_STEP_SIZE, 0.01),
     });
   },
 }));

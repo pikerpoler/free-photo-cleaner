@@ -285,7 +285,7 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.photocleanerfree.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.aiphotocleaner.app;
 				PRODUCT_NAME = FreePhotoCleaner;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_OBJC_BRIDGING_HEADER = "FreePhotoCleaner/FreePhotoCleaner-Bridging-Header.h";
@@ -317,7 +317,7 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.photocleanerfree.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.aiphotocleaner.app;
 				PRODUCT_NAME = FreePhotoCleaner;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_OBJC_BRIDGING_HEADER = "FreePhotoCleaner/FreePhotoCleaner-Bridging-Header.h";

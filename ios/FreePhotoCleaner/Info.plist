@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>FreePhotoCleaner</string>
+	<string>AI Photo Cleaner</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIconName</key>
@@ -36,9 +36,9 @@
 		<true/>
 	</dict>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>FreePhotoCleaner needs write access to move photos and videos to trash.</string>
+	<string>AI Photo Cleaner needs write access to move photos and videos to trash.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>FreePhotoCleaner needs access to your photo library to help you review and delete photos and videos to free storage space.</string>
+	<string>AI Photo Cleaner needs access to your photo library to help you review and delete photos and videos to free storage space.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

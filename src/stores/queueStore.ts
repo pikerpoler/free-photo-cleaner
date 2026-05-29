@@ -24,6 +24,9 @@ import {
   clearPendingDeletesByType,
   getPendingDeleteIds,
 } from '../services/database';
+import {useAIStore} from './aiStore';
+import {useSettingsStore} from './settingsStore';
+import {clearTrainingQueue} from '../ai/trainer';
 
 type UndoEntry = {type: 'keep' | 'delete'; asset: MediaAsset; queue: MediaType};
 
@@ -70,6 +73,15 @@ let currentVideoFilters: VideoFilters | undefined;
 let currentDateFilter: DateFilter | undefined;
 
 function sortAssets(assets: MediaAsset[], mode: SortMode): MediaAsset[] {
+  if (mode === 'ai') {
+    // AI sort is handled asynchronously via sortAssetsAI; fallback to random here
+    const sorted = [...assets];
+    for (let i = sorted.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [sorted[i], sorted[j]] = [sorted[j], sorted[i]];
+    }
+    return sorted;
+  }
   const sorted = [...assets];
   switch (mode) {
     case 'random':
@@ -87,6 +99,18 @@ function sortAssets(assets: MediaAsset[], mode: SortMode): MediaAsset[] {
     case 'newest_first':
       return sorted.sort((a, b) => b.creationDate - a.creationDate);
   }
+}
+
+async function sortAssetsAI(assets: MediaAsset[]): Promise<MediaAsset[]> {
+  const aiStore = useAIStore.getState();
+  const scores = await aiStore.scoreAssets(assets);
+  const sorted = [...assets];
+  sorted.sort((a, b) => {
+    const scoreA = scores.get(a.id) ?? 0.5;
+    const scoreB = scores.get(b.id) ?? 0.5;
+    return scoreB - scoreA; // Highest P(delete) first
+  });
+  return sorted;
 }
 
 function applyDateFilter(
@@ -161,6 +185,62 @@ function filterAndSort(
   return sortAssets(assets, sort);
 }
 
+function showDeleteTrainingGuard(
+  queueSize: number,
+  batchSize: number,
+  aiStore: ReturnType<typeof useAIStore.getState>,
+): Promise<boolean> {
+  return new Promise(resolve => {
+    if (queueSize > 0 && queueSize < batchSize) {
+      // Case B: partial batch
+      Alert.alert(
+        `${queueSize} photo${queueSize > 1 ? 's' : ''} haven't trained yet`,
+        'Quick-train before deleting?',
+        [
+          {
+            text: 'Train & Delete',
+            onPress: async () => {
+              await aiStore.flushPartial();
+              resolve(true);
+            },
+          },
+          {
+            text: 'Skip & Delete',
+            style: 'destructive',
+            onPress: () => {
+              clearTrainingQueue();
+              resolve(true);
+            },
+          },
+        ],
+        {cancelable: false},
+      );
+    } else {
+      // Case C: large queue (>= batchSize)
+      Alert.alert(
+        'AI is still learning',
+        `Your recent choices (${queueSize} remaining) are still being learned from. Wait or delete now?`,
+        [
+          {
+            text: 'Wait',
+            style: 'cancel',
+            onPress: () => resolve(false),
+          },
+          {
+            text: 'Delete Now',
+            style: 'destructive',
+            onPress: () => {
+              clearTrainingQueue();
+              resolve(true);
+            },
+          },
+        ],
+        {cancelable: false},
+      );
+    }
+  });
+}
+
 export const useQueueStore = create<QueueState>((set, get) => ({
   photoQueue: [],
   videoQueue: [],
@@ -220,6 +300,14 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           [loadingKey]: false,
           [loadingMoreKey]: !done,
         });
+        // Async AI re-sort after initial load
+        if (currentSort === 'ai' && isPhoto) {
+          sortAssetsAI(queue).then(aiSorted => {
+            if (currentPhotoSort === 'ai') {
+              set({[queueKey]: aiSorted, [indexKey]: 0});
+            }
+          });
+        }
       } else if (done) {
         // All batches loaded -- merge remainder behind the user's current position
         const currentQueue = isPhoto ? get().photoQueue : get().videoQueue;
@@ -228,7 +316,17 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         const frozenIds = new Set(frozenPrefix.map(a => a.id));
         const unfrozenRaw = rawCache.filter(a => !frozenIds.has(a.id));
         const remainder = filterAndSort(unfrozenRaw, type, currentSort, pf, vf, currentDateFilter);
-        set({[queueKey]: [...frozenPrefix, ...remainder], [loadingMoreKey]: false});
+        const merged = [...frozenPrefix, ...remainder];
+        set({[queueKey]: merged, [loadingMoreKey]: false});
+
+        // AI re-sort the unfrozen portion
+        if (currentSort === 'ai' && isPhoto) {
+          sortAssetsAI(remainder).then(aiSorted => {
+            if (currentPhotoSort === 'ai') {
+              set({[queueKey]: [...frozenPrefix, ...aiSorted]});
+            }
+          });
+        }
       }
       // Intermediate batches: silently accumulate in rawCache, no queue update
     });
@@ -259,6 +357,16 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const queueKey = isPhoto ? 'photoQueue' : 'videoQueue';
     const indexKey = isPhoto ? 'photoIndex' : 'videoIndex';
     set({[queueKey]: queue, [indexKey]: 0});
+
+    // If AI sort mode and photo type, async re-sort with scores
+    if (sort === 'ai' && isPhoto) {
+      sortAssetsAI(queue).then(aiSorted => {
+        // Only apply if sort mode hasn't changed since we started
+        if (currentPhotoSort === 'ai') {
+          set({[queueKey]: aiSorted, [indexKey]: 0});
+        }
+      });
+    }
   },
 
   swipeLeft: (type: MediaType) => {
@@ -276,6 +384,11 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const currentCount = type === 'photo' ? state.photoPendingCount : state.videoPendingCount;
 
     addPendingDelete(asset.id, asset.uri, asset.filename, asset.fileSize, asset.type);
+
+    // Train AI on this swipe (photos only, non-blocking)
+    if (type === 'photo') {
+      useAIStore.getState().trainOnSwipe(asset.id, 1);
+    }
 
     set({
       [indexKey]: index + 1,
@@ -298,6 +411,11 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
     markAssetKept(asset.id);
 
+    // Train AI on this swipe (photos only, non-blocking)
+    if (type === 'photo') {
+      useAIStore.getState().trainOnSwipe(asset.id, 0);
+    }
+
     set({
       [indexKey]: index + 1,
       [stackKey]: [...currentStack, {type: 'keep', asset, queue: type}],
@@ -310,6 +428,18 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (pending.length === 0) {
       Alert.alert('Nothing to delete', `No pending ${type} deletions found in database.`);
       return;
+    }
+
+    // Check AI training queue before deleting (photos only)
+    if (type === 'photo') {
+      const aiStore = useAIStore.getState();
+      const queueSize = aiStore.getTrainingQueueSize();
+      const {aiBatchSize, trainAI} = useSettingsStore.getState();
+
+      if (trainAI && queueSize > 0) {
+        const proceed = await showDeleteTrainingGuard(queueSize, aiBatchSize, aiStore);
+        if (!proceed) return;
+      }
     }
 
     const uris = pending.map(p => p.uri);

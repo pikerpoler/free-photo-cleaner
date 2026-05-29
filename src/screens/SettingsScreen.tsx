@@ -1,4 +1,4 @@
-import React, {useCallback, useState} from 'react';
+import React, {useCallback, useEffect, useState} from 'react';
 import {
   Alert,
   Platform,
@@ -15,8 +15,9 @@ import DateTimePicker, {
   DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
 import {useSettingsStore} from '../stores/settingsStore';
+import {useAIStore} from '../stores/aiStore';
 import {resetKeepHistory} from '../services/database';
-import {SortMode} from '../types/media';
+import {AIModelSize, SortMode} from '../types/media';
 import {formatFileSize, formatDuration} from '../utils/format';
 
 const SORT_OPTIONS: {label: string; value: SortMode}[] = [
@@ -27,18 +28,32 @@ const SORT_OPTIONS: {label: string; value: SortMode}[] = [
   {label: 'Newest first', value: 'newest_first'},
 ];
 
+const PHOTO_SORT_OPTIONS: {label: string; value: SortMode}[] = [
+  ...SORT_OPTIONS,
+  {label: 'AI', value: 'ai'},
+];
+
+const AI_MODEL_OPTIONS: {label: string; value: AIModelSize}[] = [
+  {label: 'Tiny', value: 'tiny'},
+  {label: 'Small', value: 'small'},
+  {label: 'Medium', value: 'medium'},
+];
+
 function SortPicker({
   value,
   onChange,
   isDark,
+  options,
 }: {
   value: SortMode;
   onChange: (v: SortMode) => void;
   isDark: boolean;
+  options?: {label: string; value: SortMode}[];
 }) {
+  const items = options ?? SORT_OPTIONS;
   return (
     <View style={styles.sortContainer}>
-      {SORT_OPTIONS.map(opt => (
+      {items.map(opt => (
         <TouchableOpacity
           key={opt.value}
           style={[
@@ -71,15 +86,34 @@ export function SettingsScreen() {
     photoFilters,
     videoFilters,
     dateFilter,
+    trainAI,
+    aiModel,
+    aiBatchSize,
+    aiStepSize,
     setPhotoSort,
     setVideoSort,
     setPhotoFilters,
     setVideoFilters,
     setDateFilter,
+    setTrainAI,
+    setAIModel,
+    setAIBatchSize,
+    setAIStepSize,
   } = useSettingsStore();
+
+  const {modelStatus, resetModel, refreshModelStatuses, syncTrainerConfig} =
+    useAIStore();
 
   const [showFromPicker, setShowFromPicker] = useState(false);
   const [showToPicker, setShowToPicker] = useState(false);
+
+  useEffect(() => {
+    refreshModelStatuses();
+  }, [refreshModelStatuses]);
+
+  useEffect(() => {
+    syncTrainerConfig();
+  }, [aiBatchSize, aiStepSize, aiModel, syncTrainerConfig]);
 
   const handleResetKeepHistory = useCallback(() => {
     Alert.alert(
@@ -95,6 +129,24 @@ export function SettingsScreen() {
       ],
     );
   }, []);
+
+  const handleResetModel = useCallback(
+    (size: AIModelSize) => {
+      Alert.alert(
+        `Reset ${size} model`,
+        'This will delete the trained weights. The model will start from scratch.',
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {
+            text: 'Reset',
+            style: 'destructive',
+            onPress: () => resetModel(size),
+          },
+        ],
+      );
+    },
+    [resetModel],
+  );
 
 
   const handleFromChange = useCallback(
@@ -213,7 +265,12 @@ export function SettingsScreen() {
       <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
         Photos Sort
       </Text>
-      <SortPicker value={photoSort} onChange={setPhotoSort} isDark={isDark} />
+      <SortPicker
+        value={photoSort}
+        onChange={setPhotoSort}
+        isDark={isDark}
+        options={PHOTO_SORT_OPTIONS}
+      />
 
       {/* Photo Filters */}
       <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
@@ -339,6 +396,96 @@ export function SettingsScreen() {
         />
       </View>
 
+      {/* AI Settings */}
+      <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
+        AI (Photos)
+      </Text>
+      <View style={[styles.row, isDark && styles.rowDark]}>
+        <Text style={[styles.label, isDark && styles.textDark]}>Train AI</Text>
+        <Switch
+          value={trainAI}
+          onValueChange={setTrainAI}
+          trackColor={{false: isDark ? '#39393D' : '#e9e9ea', true: '#34C759'}}
+        />
+      </View>
+
+      <Text style={[styles.filterLabel, isDark && styles.textDark]}>
+        Model
+      </Text>
+      <View style={styles.sortContainer}>
+        {AI_MODEL_OPTIONS.map(opt => (
+          <TouchableOpacity
+            key={opt.value}
+            style={[
+              styles.sortOption,
+              isDark && styles.sortOptionDark,
+              aiModel === opt.value && styles.sortOptionActive,
+            ]}
+            onPress={() => setAIModel(opt.value)}>
+            <Text
+              style={[
+                styles.sortText,
+                isDark && styles.textDark,
+                aiModel === opt.value && styles.sortTextActive,
+              ]}>
+              {opt.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={[styles.filterLabel, isDark && styles.textDark]}>
+        Batch Size: {aiBatchSize}
+      </Text>
+      <Slider
+        style={styles.sliderFull}
+        minimumValue={5}
+        maximumValue={50}
+        step={5}
+        value={aiBatchSize}
+        onSlidingComplete={v => setAIBatchSize(v)}
+        minimumTrackTintColor="#007AFF"
+      />
+
+      <Text style={[styles.filterLabel, isDark && styles.textDark]}>
+        Learning Rate: {aiStepSize.toFixed(3)}
+      </Text>
+      <Slider
+        style={styles.sliderFull}
+        minimumValue={0.001}
+        maximumValue={0.1}
+        step={0.001}
+        value={aiStepSize}
+        onSlidingComplete={v => setAIStepSize(parseFloat(v.toFixed(3)))}
+        minimumTrackTintColor="#007AFF"
+      />
+
+      <Text style={[styles.filterLabel, isDark && styles.textDark]}>
+        Reset Models
+      </Text>
+      <View style={styles.resetModelsContainer}>
+        {AI_MODEL_OPTIONS.map(opt => (
+          <TouchableOpacity
+            key={opt.value}
+            style={[
+              styles.resetModelButton,
+              modelStatus[opt.value] === 'uninitialized' &&
+                styles.resetModelButtonDisabled,
+            ]}
+            disabled={modelStatus[opt.value] === 'uninitialized'}
+            onPress={() => handleResetModel(opt.value)}>
+            <Text
+              style={[
+                styles.resetModelButtonText,
+                modelStatus[opt.value] === 'uninitialized' &&
+                  styles.resetModelButtonTextDisabled,
+              ]}>
+              Reset {opt.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {/* Actions */}
       <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
         Data Management
@@ -449,6 +596,33 @@ const styles = StyleSheet.create({
   dateButtonText: {
     fontSize: 14,
     color: '#333',
+  },
+  sliderFull: {
+    height: 32,
+    marginVertical: 4,
+  },
+  resetModelsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  resetModelButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#ff3b30',
+  },
+  resetModelButtonDisabled: {
+    backgroundColor: '#ccc',
+  },
+  resetModelButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  resetModelButtonTextDisabled: {
+    color: '#999',
   },
   actionButton: {
     marginTop: 12,

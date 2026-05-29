@@ -5,7 +5,10 @@ export type SortMode =
   | 'largest_first'
   | 'smallest_first'
   | 'oldest_first'
-  | 'newest_first';
+  | 'newest_first'
+  | 'ai';
+
+export type AIModelSize = 'tiny' | 'small' | 'medium';
 
 export interface MediaAsset {
   id: string;

@@ -1,6 +1,6 @@
 import {createMMKV, type MMKV} from 'react-native-mmkv';
 
-export const storage: MMKV = createMMKV({id: 'freephotocleaner'});
+export const storage: MMKV = createMMKV({id: 'aiphotocleaner'});
 
 const KEYS = {
   PHOTO_SORT: 'settings.photo.sort',
@@ -9,6 +9,10 @@ const KEYS = {
   VIDEO_FILTERS: 'settings.video.filters',
   DATE_FILTER: 'settings.date.filter',
   THEME: 'settings.theme',
+  TRAIN_AI: 'settings.ai.train',
+  AI_MODEL: 'settings.ai.model',
+  AI_BATCH_SIZE: 'settings.ai.batchSize',
+  AI_STEP_SIZE: 'settings.ai.stepSize',
 } as const;
 
 export function getSetting<T>(key: string, defaultValue: T): T {
