@@ -12,6 +12,7 @@ export const MediaCard = React.memo(
     return (
       <View style={styles.container}>
         <Image
+          key={asset.id}
           style={styles.image}
           source={{uri: asset.uri}}
           resizeMode="cover"
