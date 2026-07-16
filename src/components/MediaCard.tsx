@@ -15,7 +15,7 @@ export const MediaCard = React.memo(
           key={asset.id}
           style={styles.image}
           source={{uri: asset.uri}}
-          resizeMode="cover"
+          resizeMode="contain"
         />
         <View style={styles.metadataStrip}>
           <Text style={styles.metaText}>{formatDate(asset.creationDate)}</Text>

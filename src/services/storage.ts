@@ -9,10 +9,17 @@ const KEYS = {
   VIDEO_FILTERS: 'settings.video.filters',
   DATE_FILTER: 'settings.date.filter',
   THEME: 'settings.theme',
-  TRAIN_AI: 'settings.ai.train',
   AI_MODEL: 'settings.ai.model',
   AI_BATCH_SIZE: 'settings.ai.batchSize',
   AI_STEP_SIZE: 'settings.ai.stepSize',
+  AI_EPOCHS: 'settings.ai.epochs',
+  AI_TRAIN_RESIZE: 'settings.ai.trainResize',
+  LIBRARY_PHOTO_COUNT: 'library.photoCount',
+  LIBRARY_VIDEO_COUNT: 'library.videoCount',
+  LIBRARY_FREE_SPACE: 'library.freeSpace',
+  LIBRARY_TOTAL_SPACE: 'library.totalSpace',
+  LIBRARY_PHOTOS_SIZE: 'library.photosSize',
+  LIBRARY_VIDEOS_SIZE: 'library.videosSize',
 } as const;
 
 export function getSetting<T>(key: string, defaultValue: T): T {

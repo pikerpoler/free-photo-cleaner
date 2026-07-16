@@ -3,7 +3,7 @@ import {
   CameraRoll,
   PhotoIdentifier,
 } from '@react-native-camera-roll/camera-roll';
-import {MediaAsset, MediaType} from '../types/media';
+import {DateFilter, MediaAsset, MediaType} from '../types/media';
 
 const BATCH_SIZE = 100;
 
@@ -56,17 +56,37 @@ function photoIdentifierToMediaAsset(
   };
 }
 
+export function dateFilterToCameraRollTimes(dateFilter?: DateFilter): {
+  fromTime?: number;
+  toTime?: number;
+} {
+  if (!dateFilter?.enabled) return {};
+  const startOfFrom = new Date(dateFilter.from);
+  startOfFrom.setHours(0, 0, 0, 0);
+  const endOfTo = new Date(dateFilter.to);
+  endOfTo.setHours(23, 59, 59, 999);
+  // CameraRoll fromTime is exclusive — subtract 1ms for inclusive start-of-day
+  return {
+    fromTime: startOfFrom.getTime() - 1,
+    toTime: endOfTo.getTime(),
+  };
+}
+
 export async function fetchMediaAssets(
   type: MediaType,
   cursor?: string,
+  dateFilter?: DateFilter,
 ): Promise<{assets: MediaAsset[]; endCursor: string | undefined; hasMore: boolean}> {
   const assetType = type === 'photo' ? 'Photos' : 'Videos';
+  const {fromTime, toTime} = dateFilterToCameraRollTimes(dateFilter);
 
   const result = await CameraRoll.getPhotos({
     first: BATCH_SIZE,
     after: cursor,
     assetType,
     include: ['filename', 'fileSize', 'imageSize', 'playableDuration'],
+    ...(fromTime != null ? {fromTime} : {}),
+    ...(toTime != null ? {toTime} : {}),
   });
 
   const assets = result.edges.map(edge =>
@@ -96,6 +116,7 @@ export type OnBatchLoaded = (
 export function loadMediaProgressively(
   type: MediaType,
   onBatch: OnBatchLoaded,
+  dateFilter?: DateFilter,
 ): ProgressiveLoadController {
   let cancelled = false;
 
@@ -110,7 +131,7 @@ export function loadMediaProgressively(
     let hasMore = true;
 
     while (hasMore && !cancelled) {
-      const result = await fetchMediaAssets(type, cursor);
+      const result = await fetchMediaAssets(type, cursor, dateFilter);
       if (cancelled) return;
       onBatch(result.assets, !result.hasMore);
       cursor = result.endCursor;

@@ -1,11 +1,13 @@
 import React, {useEffect, useState} from 'react';
 import {StyleSheet, Text, View, useColorScheme} from 'react-native';
-import {getNativeStorageInfo} from '../services/nativeStorage';
+import {getNativeStorageInfo, getCachedLibraryStats} from '../services/nativeStorage';
 import {StorageInfo} from '../types/media';
 import {formatFileSize} from '../utils/format';
 
 export function StorageBar() {
-  const [info, setInfo] = useState<StorageInfo | null>(null);
+  const [info, setInfo] = useState<StorageInfo | null>(
+    () => getCachedLibraryStats(),
+  );
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
 

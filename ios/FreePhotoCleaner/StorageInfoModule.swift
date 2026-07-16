@@ -57,6 +57,8 @@ class StorageInfoModule: NSObject {
         "freeSpace": NSNumber(value: freeSpace),
         "photosSize": NSNumber(value: photosSize),
         "videosSize": NSNumber(value: videosSize),
+        "photoCount": NSNumber(value: photoCount),
+        "videoCount": NSNumber(value: videoCount),
       ]
 
       resolve(result)

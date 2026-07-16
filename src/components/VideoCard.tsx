@@ -31,7 +31,7 @@ export function VideoCard({asset, isActive}: VideoCardProps) {
           ref={videoRef}
           source={{uri: asset.uri}}
           style={styles.video}
-          resizeMode="cover"
+          resizeMode="contain"
           repeat
           muted={muted}
           paused={!isActive}

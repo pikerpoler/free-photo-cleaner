@@ -8,6 +8,7 @@ export type SortMode =
   | 'newest_first'
   | 'ai';
 
+/** Legacy MLP size keys used by the old JS trainer (unused for on-device CNN path) */
 export type AIModelSize = 'tiny' | 'small' | 'medium';
 
 export interface MediaAsset {
@@ -51,5 +52,7 @@ export interface StorageInfo {
   freeSpace: number;
   photosSize: number;
   videosSize: number;
+  photoCount?: number;
+  videoCount?: number;
   isFallback?: boolean;
 }

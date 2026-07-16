@@ -1,7 +1,9 @@
-import React, {useCallback, useEffect} from 'react';
+import React, {useCallback, useEffect, useState} from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
+  SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -13,12 +15,14 @@ import {useSettingsStore} from '../stores/settingsStore';
 import {SwipeCard} from '../components/SwipeCard';
 import {MediaCard} from '../components/MediaCard';
 import {StorageBar} from '../components/StorageBar';
+import {TrainAIScreen} from './TrainAIScreen';
 
 const BATCH_WARNING_THRESHOLD = 1024;
 
 export function PhotosScreen() {
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
+  const [showTrainAI, setShowTrainAI] = useState(false);
 
   const {
     photoQueue,
@@ -86,13 +90,37 @@ export function PhotosScreen() {
         'You may want to delete your photos in smaller batches to avoid system timeouts.',
         [
           {text: 'Cancel', style: 'cancel'},
-          {text: 'Delete anyway', style: 'destructive', onPress: () => flushDeletes('photo')},
+          {
+            text: 'Delete anyway',
+            style: 'destructive',
+            onPress: () => flushDeletes('photo'),
+          },
         ],
       );
     } else {
       flushDeletes('photo');
     }
   }, [photoPendingCount, flushDeletes]);
+
+  const trainButton = (
+    <TouchableOpacity
+      onPress={() => setShowTrainAI(true)}
+      style={styles.trainButton}>
+      <Text style={styles.trainText}>Train AI</Text>
+    </TouchableOpacity>
+  );
+
+  const trainModal = (
+    <Modal
+      visible={showTrainAI}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={() => setShowTrainAI(false)}>
+      <SafeAreaView style={[styles.container, isDark && styles.bgDark]}>
+        <TrainAIScreen onClose={() => setShowTrainAI(false)} />
+      </SafeAreaView>
+    </Modal>
+  );
 
   if (isLoadingPhotos) {
     return (
@@ -101,6 +129,7 @@ export function PhotosScreen() {
         <Text style={[styles.loadingText, isDark && styles.textDark]}>
           Loading photos...
         </Text>
+        {trainModal}
       </View>
     );
   }
@@ -113,6 +142,7 @@ export function PhotosScreen() {
           <Text style={[styles.loadingText, isDark && styles.textDark]}>
             Loading more photos...
           </Text>
+          {trainModal}
         </View>
       );
     }
@@ -126,7 +156,9 @@ export function PhotosScreen() {
           No more photos to review.
         </Text>
         {photoPendingCount > 0 && (
-          <TouchableOpacity onPress={handleDelete} style={styles.deleteButtonLarge}>
+          <TouchableOpacity
+            onPress={handleDelete}
+            style={styles.deleteButtonLarge}>
             {photoPendingCount >= BATCH_WARNING_THRESHOLD && (
               <Text style={styles.warningIcon}>⚠️ </Text>
             )}
@@ -135,7 +167,9 @@ export function PhotosScreen() {
             </Text>
           </TouchableOpacity>
         )}
+        {trainButton}
         <StorageBar />
+        {trainModal}
       </View>
     );
   }
@@ -147,6 +181,7 @@ export function PhotosScreen() {
           {remaining} remaining
         </Text>
         <View style={styles.headerButtons}>
+          {trainButton}
           {canUndo && (
             <TouchableOpacity onPress={handleUndo} style={styles.undoButton}>
               <Text style={styles.undoText}>Undo</Text>
@@ -174,6 +209,7 @@ export function PhotosScreen() {
       </SwipeCard>
 
       <StorageBar />
+      {trainModal}
     </View>
   );
 }
@@ -215,6 +251,17 @@ const styles = StyleSheet.create({
   },
   textSecondary: {
     color: '#8e8e93',
+  },
+  trainButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#5856D6',
+    borderRadius: 14,
+  },
+  trainText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
   },
   undoButton: {
     paddingHorizontal: 12,
