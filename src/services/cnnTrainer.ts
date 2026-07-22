@@ -1,6 +1,6 @@
 import {NativeEventEmitter, NativeModules, Platform} from 'react-native';
 import {
-  ActiveModelInfo,
+  ModelCheckpointInfo,
   TrainingConfig,
   TrainingProgress,
   TrainingResult,
@@ -35,11 +35,33 @@ export async function hasActiveModel(): Promise<boolean> {
   return Boolean(await CNNTrainerModule.hasActiveModel());
 }
 
-export async function getActiveModelInfo(): Promise<ActiveModelInfo | null> {
+export async function getActiveModelInfo(): Promise<ModelCheckpointInfo | null> {
   if (!(await isTrainerAvailable())) return null;
   const info = await CNNTrainerModule.getActiveModelInfo();
   if (!info || typeof info !== 'object') return null;
-  return info as ActiveModelInfo;
+  return info as ModelCheckpointInfo;
+}
+
+export async function listModelCheckpoints(): Promise<ModelCheckpointInfo[]> {
+  if (!(await isTrainerAvailable())) return [];
+  try {
+    const list = await CNNTrainerModule.listModelCheckpoints();
+    return (list as ModelCheckpointInfo[]) || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function loadModel(modelId: string): Promise<void> {
+  if (!(await isTrainerAvailable())) {
+    throw new Error('Trainer unavailable');
+  }
+  await CNNTrainerModule.loadModel(modelId);
+}
+
+export async function deleteModel(modelId: string): Promise<void> {
+  if (!(await isTrainerAvailable())) return;
+  await CNNTrainerModule.deleteModel(modelId);
 }
 
 export async function resetActiveModel(): Promise<void> {

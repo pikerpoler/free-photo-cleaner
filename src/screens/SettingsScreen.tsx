@@ -18,8 +18,10 @@ import DateTimePicker, {
 } from '@react-native-community/datetimepicker';
 import {useSettingsStore} from '../stores/settingsStore';
 import {useAIStore} from '../stores/aiStore';
+import {useQueueStore} from '../stores/queueStore';
 import {resetKeepHistory} from '../services/database';
 import {SortMode} from '../types/media';
+import {TrainableModelId, TRAINABLE_MODELS} from '../ai/cnnTypes';
 import {formatFileSize, formatDuration} from '../utils/format';
 import {TrainAIScreen} from './TrainAIScreen';
 
@@ -90,8 +92,10 @@ export function SettingsScreen() {
     setDateFilter,
   } = useSettingsStore();
 
-  const {hasModel, activeModelInfo, resetModel, refreshModelStatus} =
+  const {hasModel, activeModelInfo, resetModel, refreshModelStatus, refreshCheckpoints, checkpoints, selectSortModel, deleteCheckpoint} =
     useAIStore();
+  const resetAIQueue = useQueueStore(s => s.resetAIQueue);
+  const setAISortModel = useSettingsStore(s => s.setAISortModel);
 
   const [showFromPicker, setShowFromPicker] = useState(false);
   const [showToPicker, setShowToPicker] = useState(false);
@@ -99,7 +103,8 @@ export function SettingsScreen() {
 
   useEffect(() => {
     refreshModelStatus();
-  }, [refreshModelStatus]);
+    refreshCheckpoints();
+  }, [refreshModelStatus, refreshCheckpoints]);
 
   const handleResetKeepHistory = useCallback(() => {
     Alert.alert(
@@ -116,6 +121,58 @@ export function SettingsScreen() {
     );
   }, []);
 
+  const handleResetAIQueue = useCallback(() => {
+    Alert.alert(
+      'Reset AI Queue',
+      'Clears AI scores and rebuilds the photo swipe queue. Kept / marked-for-deletion labels are kept.',
+      [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: () => resetAIQueue(),
+        },
+      ],
+    );
+  }, [resetAIQueue]);
+
+  const handleSelectSortModel = useCallback(
+    async (modelId: TrainableModelId) => {
+      try {
+        await selectSortModel(modelId);
+        setAISortModel(modelId);
+        await resetAIQueue();
+      } catch (e: unknown) {
+        Alert.alert(
+          'Load failed',
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    },
+    [selectSortModel, setAISortModel, resetAIQueue],
+  );
+
+  const handleDeleteCheckpoint = useCallback(
+    (modelId: string) => {
+      Alert.alert(
+        `Delete ${modelId}`,
+        'Delete this model’s saved weights?',
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: async () => {
+              await deleteCheckpoint(modelId);
+              await resetAIQueue();
+            },
+          },
+        ],
+      );
+    },
+    [deleteCheckpoint, resetAIQueue],
+  );
+
   const handleResetModel = useCallback(() => {
     Alert.alert(
       'Reset trained model',
@@ -125,11 +182,15 @@ export function SettingsScreen() {
         {
           text: 'Reset',
           style: 'destructive',
-          onPress: () => resetModel(),
+          onPress: async () => {
+            await resetModel();
+            await refreshCheckpoints();
+            await resetAIQueue();
+          },
         },
       ],
     );
-  }, [resetModel]);
+  }, [resetModel, refreshCheckpoints, resetAIQueue]);
 
   const handleFromChange = useCallback(
     (event: DateTimePickerEvent, selectedDate?: Date) => {
@@ -411,6 +472,71 @@ export function SettingsScreen() {
           onPress={() => setShowTrainAI(true)}>
           <Text style={styles.trainButtonText}>Train AI</Text>
         </TouchableOpacity>
+
+        {photoSort === 'ai' && (
+          <>
+            <Text style={[styles.filterLabel, isDark && styles.textDark]}>
+              AI sort model checkpoints
+            </Text>
+            {checkpoints.length === 0 ? (
+              <Text style={[styles.filterLabel, isDark && styles.textSecondary]}>
+                No saved checkpoints. Train a model first.
+              </Text>
+            ) : (
+              checkpoints.map(cp => {
+                const label =
+                  TRAINABLE_MODELS.find(m => m.id === cp.modelId)?.label ??
+                  cp.modelId;
+                const isActive = activeModelInfo?.modelId === cp.modelId;
+                const date = new Date(cp.trainedAt || cp.savedAt || 0);
+                return (
+                  <View
+                    key={cp.modelId}
+                    style={[styles.checkpointRow, isDark && styles.rowDark]}>
+                    <TouchableOpacity
+                      style={styles.checkpointInfo}
+                      onPress={() =>
+                        handleSelectSortModel(cp.modelId as TrainableModelId)
+                      }>
+                      <Text
+                        style={[
+                          styles.checkpointTitle,
+                          isDark && styles.textDark,
+                          isActive && styles.checkpointActive,
+                        ]}>
+                        {label}
+                        {isActive ? ' (active)' : ''}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.checkpointMeta,
+                          isDark && styles.textSecondary,
+                        ]}>
+                        loss {Number(cp.bestTestLoss).toFixed(4)} · acc{' '}
+                        {Number(cp.bestTestAcc ?? 0).toFixed(3)} · test n=
+                        {cp.testSize ?? '?'} ·{' '}
+                        {isNaN(date.getTime())
+                          ? '—'
+                          : date.toLocaleDateString()}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.checkpointDelete}
+                      onPress={() => handleDeleteCheckpoint(cp.modelId)}>
+                      <Text style={styles.checkpointDeleteText}>Delete</Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })
+            )}
+          </>
+        )}
+
+        <TouchableOpacity
+          style={styles.resetQueueButton}
+          onPress={handleResetAIQueue}>
+          <Text style={styles.trainButtonText}>Reset AI Queue</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={[
             styles.resetModelButton,
@@ -447,6 +573,7 @@ export function SettingsScreen() {
             onClose={() => {
               setShowTrainAI(false);
               refreshModelStatus();
+              refreshCheckpoints();
             }}
           />
         </SafeAreaView>
@@ -560,11 +687,36 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF',
     alignItems: 'center',
   },
+  resetQueueButton: {
+    marginTop: 12,
+    paddingVertical: 14,
+    borderRadius: 10,
+    backgroundColor: '#5856D6',
+    alignItems: 'center',
+  },
   trainButtonText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#fff',
   },
+  checkpointRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e0e0e0',
+  },
+  checkpointInfo: {flex: 1, paddingRight: 8},
+  checkpointTitle: {fontSize: 15, fontWeight: '600', color: '#333'},
+  checkpointActive: {color: '#007AFF'},
+  checkpointMeta: {fontSize: 12, color: '#8e8e93', marginTop: 2},
+  checkpointDelete: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#ff3b30',
+    borderRadius: 6,
+  },
+  checkpointDeleteText: {color: '#fff', fontSize: 12, fontWeight: '600'},
   resetModelButton: {
     marginTop: 8,
     paddingHorizontal: 14,

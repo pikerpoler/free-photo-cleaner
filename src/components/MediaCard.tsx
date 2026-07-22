@@ -5,10 +5,11 @@ import {formatFileSize, formatDate, formatResolution, formatDuration} from '../u
 
 interface MediaCardProps {
   asset: MediaAsset;
+  score?: number | null;
 }
 
 export const MediaCard = React.memo(
-  function MediaCard({asset}: MediaCardProps) {
+  function MediaCard({asset, score}: MediaCardProps) {
     return (
       <View style={styles.container}>
         <Image
@@ -17,6 +18,11 @@ export const MediaCard = React.memo(
           source={{uri: asset.uri}}
           resizeMode="contain"
         />
+        {score != null && (
+          <View style={styles.scoreBadge}>
+            <Text style={styles.scoreText}>{score.toFixed(2)}</Text>
+          </View>
+        )}
         <View style={styles.metadataStrip}>
           <Text style={styles.metaText}>{formatDate(asset.creationDate)}</Text>
           <Text style={styles.metaText}>{formatFileSize(asset.fileSize)}</Text>
@@ -32,7 +38,8 @@ export const MediaCard = React.memo(
       </View>
     );
   },
-  (prev, next) => prev.asset.id === next.asset.id,
+  (prev, next) =>
+    prev.asset.id === next.asset.id && prev.score === next.score,
 );
 
 const styles = StyleSheet.create({
@@ -41,6 +48,20 @@ const styles = StyleSheet.create({
   },
   image: {
     flex: 1,
+  },
+  scoreBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  scoreText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
   },
   metadataStrip: {
     position: 'absolute',

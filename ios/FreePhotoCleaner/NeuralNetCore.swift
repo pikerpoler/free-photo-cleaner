@@ -51,7 +51,17 @@ func sigmoid(_ x: Float) -> Float {
 }
 
 func clampResize(_ v: Int) -> Int {
-  min(512, max(32, v))
+  let allowed = [32, 64, 128, 256, 512]
+  var best = 64
+  var bestDist = Int.max
+  for a in allowed {
+    let d = abs(a - v)
+    if d < bestDist {
+      bestDist = d
+      best = a
+    }
+  }
+  return best
 }
 
 // MARK: - Layers
@@ -609,129 +619,81 @@ final class SequentialModel: TrainableModel {
   }
 }
 
-// MARK: - ResNet-18
+// MARK: - Frozen backbone + trainable head (MobileNetV3-head stand-in)
 
-final class ResNet18Model: TrainableModel {
-  let modelId = "resnet-18"
-  let stem: Conv2dLayer
-  let stemRelu: ReLULayer
-  let layers: [BasicBlock]
-  let pool: GlobalAvgPool2dLayer
-  let fc: LinearLayer
+/// Fixed (non-updating) CNN feature extractor + trainable linear head.
+/// When a Core ML MobileNetV3 is later bundled, swap `extractFeatures` to use it.
+final class FrozenBackboneHeadModel: TrainableModel {
+  let modelId: String
+  let backbone: [Layer]
+  let head: LinearLayer
   private var lastPred: Float = 0.5
+  private let featureDim: Int
 
-  init(inputChannels: Int = 3) {
-    // Small-image friendly stem (3x3 s1) instead of 7x7 s2
-    stem = Conv2dLayer(inChannels: inputChannels, outChannels: 64, kernel: 3, stride: 1, padding: 1)
-    stemRelu = ReLULayer()
-    var blocks: [BasicBlock] = []
-    // layer1: 64
-    blocks.append(BasicBlock(inChannels: 64, outChannels: 64, stride: 1))
-    blocks.append(BasicBlock(inChannels: 64, outChannels: 64, stride: 1))
-    // layer2: 128
-    blocks.append(BasicBlock(inChannels: 64, outChannels: 128, stride: 2))
-    blocks.append(BasicBlock(inChannels: 128, outChannels: 128, stride: 1))
-    // layer3: 256
-    blocks.append(BasicBlock(inChannels: 128, outChannels: 256, stride: 2))
-    blocks.append(BasicBlock(inChannels: 256, outChannels: 256, stride: 1))
-    // layer4: 512
-    blocks.append(BasicBlock(inChannels: 256, outChannels: 512, stride: 2))
-    blocks.append(BasicBlock(inChannels: 512, outChannels: 512, stride: 1))
-    layers = blocks
-    pool = GlobalAvgPool2dLayer()
-    fc = LinearLayer(inFeatures: 512, outFeatures: 1)
+  init(modelId: String = "mobilenet-v3-head") {
+    self.modelId = modelId
+    // Lightweight frozen feature tower (weights never updated)
+    backbone = [
+      Conv2dLayer(inChannels: 3, outChannels: 16, kernel: 3, stride: 2, padding: 1),
+      ReLULayer(),
+      Conv2dLayer(inChannels: 16, outChannels: 32, kernel: 3, stride: 2, padding: 1),
+      ReLULayer(),
+      Conv2dLayer(inChannels: 32, outChannels: 64, kernel: 3, stride: 2, padding: 1),
+      ReLULayer(),
+      GlobalAvgPool2dLayer(),
+    ]
+    featureDim = 64
+    head = LinearLayer(inFeatures: 64, outFeatures: 1)
+  }
+
+  private func extractFeatures(_ input: Tensor) -> Tensor {
+    var x = input
+    for layer in backbone {
+      x = layer.forward(x)
+    }
+    return x
   }
 
   func forward(_ input: Tensor) -> Float {
-    var x = stem.forward(input)
-    x = stemRelu.forward(x)
-    for block in layers {
-      x = block.forward(x)
-    }
-    x = pool.forward(x)
-    x = fc.forward(x)
-    lastPred = sigmoid(x[0])
+    let feats = extractFeatures(input)
+    let out = head.forward(feats)
+    lastPred = sigmoid(out[0])
     return lastPred
   }
 
   func backward(target: Float) {
-    let dLossDz = bceGrad(pred: lastPred, target: target)
+    let dLossDz = lastPred - target
     var g = Tensor(shape: [1], data: [dLossDz])
-    g = fc.backward(g)
-    g = pool.backward(g)
-    for block in layers.reversed() {
-      g = block.backward(g)
-    }
-    g = stemRelu.backward(g)
-    _ = stem.backward(g)
+    g = head.backward(g)
+    // Do not backprop into frozen backbone
   }
 
   func zeroGrad() {
-    stem.zeroGrad()
-    for block in layers { block.zeroGrad() }
-    fc.zeroGrad()
+    head.zeroGrad()
   }
 
   func applyGrad(lr: Float, batchSize: Int) {
     let scale = lr / Float(max(1, batchSize))
-    stem.applyGrad(lr: scale)
-    for block in layers { block.applyGrad(lr: scale) }
-    fc.applyGrad(lr: scale)
+    head.applyGrad(lr: scale)
   }
 
   func serialize() -> Data {
     var parts: [Data] = []
-    func appendFloats(_ arr: [Float]) {
-      arr.withUnsafeBufferPointer { buf in
-        parts.append(Data(buffer: buf))
-      }
-    }
-    func appendConv(_ conv: Conv2dLayer) {
-      var oc = UInt32(conv.outChannels)
-      var ic = UInt32(conv.inChannels)
-      var k = UInt32(conv.kernel)
-      var s = UInt32(conv.stride)
-      var p = UInt32(conv.padding)
-      parts.append(Data(bytes: &oc, count: 4))
-      parts.append(Data(bytes: &ic, count: 4))
-      parts.append(Data(bytes: &k, count: 4))
-      parts.append(Data(bytes: &s, count: 4))
-      parts.append(Data(bytes: &p, count: 4))
-      appendFloats(conv.weight)
-      appendFloats(conv.bias)
-    }
-    func appendLinear(_ lin: LinearLayer) {
-      var o = UInt32(lin.outFeatures)
-      var i = UInt32(lin.inFeatures)
-      parts.append(Data(bytes: &o, count: 4))
-      parts.append(Data(bytes: &i, count: 4))
-      appendFloats(lin.weight)
-      appendFloats(lin.bias)
-    }
-    let magic = Data("RS18".utf8)
+    let magic = Data("MBHD".utf8)
     parts.append(magic)
-    appendConv(stem)
-    for block in layers {
-      appendConv(block.conv1)
-      appendConv(block.conv2)
-      if let ds = block.downsample {
-        var has: UInt32 = 1
-        parts.append(Data(bytes: &has, count: 4))
-        appendConv(ds)
-      } else {
-        var has: UInt32 = 0
-        parts.append(Data(bytes: &has, count: 4))
-      }
-    }
-    appendLinear(fc)
+    var o = UInt32(head.outFeatures)
+    var i = UInt32(head.inFeatures)
+    parts.append(Data(bytes: &o, count: 4))
+    parts.append(Data(bytes: &i, count: 4))
+    head.weight.withUnsafeBufferPointer { parts.append(Data(buffer: $0)) }
+    head.bias.withUnsafeBufferPointer { parts.append(Data(buffer: $0)) }
     return parts.reduce(Data(), +)
   }
 
-  static func deserialize(_ data: Data, inputSize: Int) -> ResNet18Model? {
-    guard data.count > 4, String(data: data.prefix(4), encoding: .utf8) == "RS18" else { return nil }
-    let model = ResNet18Model()
+  static func deserialize(_ data: Data, inputSize: Int) -> FrozenBackboneHeadModel? {
+    guard data.count > 4, String(data: data.prefix(4), encoding: .utf8) == "MBHD" else { return nil }
+    let model = FrozenBackboneHeadModel()
     var offset = 4
-
     func readU32() -> UInt32 {
       let v: UInt32 = data.subdata(in: offset..<(offset + 4)).withUnsafeBytes { $0.load(as: UInt32.self) }
       offset += 4
@@ -741,31 +703,11 @@ final class ResNet18Model: TrainableModel {
       let byteCount = n * 4
       let slice = data.subdata(in: offset..<(offset + byteCount))
       offset += byteCount
-      return slice.withUnsafeBytes { buf in
-        Array(buf.bindMemory(to: Float.self))
-      }
+      return slice.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
     }
-    func loadConv(_ conv: Conv2dLayer) {
-      _ = readU32(); _ = readU32(); _ = readU32(); _ = readU32(); _ = readU32()
-      conv.weight = readFloats(conv.weight.count)
-      conv.bias = readFloats(conv.bias.count)
-    }
-    func loadLinear(_ lin: LinearLayer) {
-      _ = readU32(); _ = readU32()
-      lin.weight = readFloats(lin.weight.count)
-      lin.bias = readFloats(lin.bias.count)
-    }
-
-    loadConv(model.stem)
-    for block in model.layers {
-      loadConv(block.conv1)
-      loadConv(block.conv2)
-      let has = readU32()
-      if has == 1, let ds = block.downsample {
-        loadConv(ds)
-      }
-    }
-    loadLinear(model.fc)
+    _ = readU32(); _ = readU32()
+    model.head.weight = readFloats(model.head.weight.count)
+    model.head.bias = readFloats(model.head.bias.count)
     return model
   }
 }
@@ -798,6 +740,14 @@ enum ModelFactory {
         LinearLayer(inFeatures: 256, outFeatures: 64),
         ReLULayer(),
         LinearLayer(inFeatures: 64, outFeatures: 1),
+      ])
+    case "cnn-micro":
+      return SequentialModel(modelId: modelId, layers: [
+        Conv2dLayer(inChannels: 3, outChannels: 8, kernel: 3, stride: 1, padding: 1),
+        ReLULayer(),
+        MaxPool2dLayer(kernel: 2, stride: 2),
+        GlobalAvgPool2dLayer(),
+        LinearLayer(inFeatures: 8, outFeatures: 1),
       ])
     case "cnn-nano":
       return SequentialModel(modelId: modelId, layers: [
@@ -840,8 +790,8 @@ enum ModelFactory {
         GlobalAvgPool2dLayer(),
         LinearLayer(inFeatures: 128, outFeatures: 1),
       ])
-    case "resnet-18":
-      return ResNet18Model()
+    case "mobilenet-v3-head":
+      return FrozenBackboneHeadModel(modelId: modelId)
     default:
       return SequentialModel(modelId: "cnn-nano", layers: [
         Conv2dLayer(inChannels: 3, outChannels: 8, kernel: 3, stride: 1, padding: 1),

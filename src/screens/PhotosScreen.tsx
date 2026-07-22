@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import {useQueueStore} from '../stores/queueStore';
 import {useSettingsStore} from '../stores/settingsStore';
+import {useAIStore} from '../stores/aiStore';
 import {SwipeCard} from '../components/SwipeCard';
 import {MediaCard} from '../components/MediaCard';
 import {StorageBar} from '../components/StorageBar';
@@ -40,6 +41,7 @@ export function PhotosScreen() {
   } = useQueueStore();
 
   const {photoSort, photoFilters, dateFilter} = useSettingsStore();
+  const scoreById = useAIStore(s => s.scoreById);
 
   const photoFiltersRef = React.useRef(photoFilters);
   const dateFilterRef = React.useRef(dateFilter);
@@ -70,6 +72,11 @@ export function PhotosScreen() {
   const nextAsset = photoQueue[photoIndex + 1] || null;
   const remaining = photoQueue.length - photoIndex;
   const canUndo = photoUndoStack.length > 0;
+  const showScores = photoSort === 'ai';
+  const currentScore = currentAsset
+    ? scoreById[currentAsset.id]
+    : undefined;
+  const nextScore = nextAsset ? scoreById[nextAsset.id] : undefined;
 
   const handleSwipeLeft = useCallback(() => {
     swipeLeft('photo');
@@ -204,8 +211,18 @@ export function PhotosScreen() {
         onSwipeLeft={handleSwipeLeft}
         onSwipeRight={handleSwipeRight}
         cardKey={currentAsset.id}
-        behindContent={nextAsset ? <MediaCard asset={nextAsset} /> : undefined}>
-        <MediaCard asset={currentAsset} />
+        behindContent={
+          nextAsset ? (
+            <MediaCard
+              asset={nextAsset}
+              score={showScores ? nextScore : null}
+            />
+          ) : undefined
+        }>
+        <MediaCard
+          asset={currentAsset}
+          score={showScores ? currentScore : null}
+        />
       </SwipeCard>
 
       <StorageBar />

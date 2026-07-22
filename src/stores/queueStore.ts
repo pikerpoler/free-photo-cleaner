@@ -59,6 +59,7 @@ interface QueueState {
   flushDeletes: (type: MediaType) => Promise<void>;
   getCurrentAsset: (type: MediaType) => MediaAsset | null;
   getNextAsset: (type: MediaType) => MediaAsset | null;
+  resetAIQueue: () => Promise<void>;
 }
 
 let photoLoadController: ProgressiveLoadController | null = null;
@@ -578,5 +579,31 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const queue = type === 'photo' ? state.photoQueue : state.videoQueue;
     const index = type === 'photo' ? state.photoIndex : state.videoIndex;
     return queue[index + 1] || null;
+  },
+
+  resetAIQueue: async () => {
+    useAIStore.getState().clearScores();
+    const rawCache = photoRawCache;
+    if (rawCache.length === 0) return;
+
+    const sort = currentPhotoSort;
+    const pf = currentPhotoFilters;
+    const queue = filterAndSort(
+      rawCache,
+      'photo',
+      sort,
+      pf,
+      undefined,
+      currentDateFilter,
+    );
+
+    if (sort === 'ai') {
+      const aiSorted = await sortAssetsAI(queue);
+      if (currentPhotoSort === 'ai') {
+        set({photoQueue: aiSorted, photoIndex: 0});
+      }
+    } else {
+      set({photoQueue: queue, photoIndex: 0});
+    }
   },
 }));

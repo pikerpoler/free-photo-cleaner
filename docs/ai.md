@@ -1,39 +1,34 @@
 # AI Module
 
-Fully on-device machine learning for photo delete/keep prediction. No network calls. No pretrained weights in the IPA.
+Fully on-device machine learning for photo delete/keep prediction. No network calls.
 
 ## Overview
 
 ```
-Swipe keep/delete → SQLite labels → Train AI screen → Native CNN trainer → Best checkpoint → AI sort scoring
+Swipe keep/delete → SQLite labels → Train AI → Native trainer → Per-model checkpoint → AI sort + score badge
 ```
-
-- **Labels**: kept (`0`) and pending-delete (`1`) photos in SQLite. Unseen photos are never used for training.
-- **Training**: manual via Train AI screen (epoch SGD, 80/20 split, live loss graph, Stop, keep best by test loss).
-- **Models**: from-scratch MLP / CNN / ResNet-18 on resized RGB pixels (`trainResize` 32–512).
-- **Scoring**: native `predict` using the active checkpoint for AI sort.
-
-## Key files
-
-| Path | Role |
-|------|------|
-| `src/screens/TrainAIScreen.tsx` | Train UI: model, resize, batch, LR, epochs, graph |
-| `src/services/cnnTrainer.ts` | JS bridge to `CNNTrainerModule` |
-| `src/ai/cnnTypes.ts` | Model IDs and training types |
-| `src/stores/aiStore.ts` | Active model status + `scoreAssets` |
-| `ios/.../CNNTrainerModule.swift` | Decode PHAsset → train loop → events |
-| `ios/.../NeuralNetCore.swift` | Layers, CNN/MLP/ResNet-18, serialize |
 
 ## Models
 
-- `mlp-tiny` / `mlp-small` / `mlp-medium` — flatten pixels → FC
-- `cnn-nano` / `cnn-tiny` / `cnn-small` — small conv nets
-- `resnet-18` — from-scratch ResNet-18 (no ImageNet weights)
+Defined in `ios/FreePhotoCleaner/NeuralNetCore.swift` (`ModelFactory.create`):
 
-## Persistence
+- Scratch: `mlp-*`, `cnn-micro`, `cnn-nano`, `cnn-tiny`, `cnn-small`
+- `mobilenet-v3-head`: frozen feature backbone + trainable linear head
+- ResNet-18 removed
 
-- Labels: `kept_assets`, `pending_deletes`
-- Active model: `DocumentDirectory/ai_models/active_weights.bin` + `active_meta.json`
-- Library index: `asset_catalog` (speeds discovery / date filter)
+## Training UX
 
-Deletion remains manual via **Delete N**; training never deletes gallery photos.
+- Accuracy + loss graphs, power-of-2 resize (32–512)
+- Augmentations (normalize, crop, flip, rotate, noise, jitter, grayscale)
+- LR schedulers: constant, cosine, step, exponential
+- Best checkpoint by lowest test loss (stores test acc too)
+
+## Checkpoints
+
+```
+Documents/ai_models/{modelId}/weights.bin
+Documents/ai_models/{modelId}/meta.json
+Documents/ai_models/active_model_id.txt
+```
+
+Settings → Photos Sort = AI shows checkpoint list (loss, acc, test size, date) with select/delete. Switching model or **Reset AI Queue** clears scores and rebuilds the swipe queue without touching keep/delete labels.

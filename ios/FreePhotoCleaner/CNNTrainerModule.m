@@ -9,6 +9,16 @@ RCT_EXTERN_METHOD(hasActiveModel:(RCTPromiseResolveBlock)resolve rejecter:(RCTPr
 
 RCT_EXTERN_METHOD(getActiveModelInfo:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(listModelCheckpoints:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(loadModel:(NSString *)modelId
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(deleteModel:(NSString *)modelId
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(resetActiveModel:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(stopTraining:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
