@@ -5,11 +5,13 @@ import {formatFileSize, formatDate, formatResolution, formatDuration} from '../u
 
 interface MediaCardProps {
   asset: MediaAsset;
+  /** Reserve the AI score slot so the strip doesn't reflow while scoring. */
+  showScore?: boolean;
   score?: number | null;
 }
 
 export const MediaCard = React.memo(
-  function MediaCard({asset, score}: MediaCardProps) {
+  function MediaCard({asset, showScore = false, score}: MediaCardProps) {
     return (
       <View style={styles.container}>
         <Image
@@ -18,11 +20,6 @@ export const MediaCard = React.memo(
           source={{uri: asset.uri}}
           resizeMode="contain"
         />
-        {score != null && (
-          <View style={styles.scoreBadge}>
-            <Text style={styles.scoreText}>{score.toFixed(2)}</Text>
-          </View>
-        )}
         <View style={styles.metadataStrip}>
           <Text style={styles.metaText}>{formatDate(asset.creationDate)}</Text>
           <Text style={styles.metaText}>{formatFileSize(asset.fileSize)}</Text>
@@ -34,12 +31,19 @@ export const MediaCard = React.memo(
           {asset.duration !== undefined && asset.duration > 0 && (
             <Text style={styles.metaText}>{formatDuration(asset.duration)}</Text>
           )}
+          {showScore && (
+            <Text style={[styles.metaText, styles.scoreText]}>
+              {score != null ? `AI ${score.toFixed(2)}` : 'AI …'}
+            </Text>
+          )}
         </View>
       </View>
     );
   },
   (prev, next) =>
-    prev.asset.id === next.asset.id && prev.score === next.score,
+    prev.asset.id === next.asset.id &&
+    prev.showScore === next.showScore &&
+    prev.score === next.score,
 );
 
 const styles = StyleSheet.create({
@@ -48,20 +52,6 @@ const styles = StyleSheet.create({
   },
   image: {
     flex: 1,
-  },
-  scoreBadge: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  scoreText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700',
   },
   metadataStrip: {
     position: 'absolute',
@@ -78,5 +68,10 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12,
     fontWeight: '500',
+  },
+  scoreText: {
+    minWidth: 58,
+    textAlign: 'right',
+    fontVariant: ['tabular-nums'],
   },
 });

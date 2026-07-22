@@ -11,11 +11,13 @@ import {
   resetActiveModel,
 } from '../services/cnnTrainer';
 
+/** Serialize scoreAssets so concurrent callers never re-predict the same ids. */
+let scoreChain: Promise<unknown> = Promise.resolve();
+
 interface AIState {
   hasModel: boolean;
   activeModelInfo: ModelCheckpointInfo | null;
   checkpoints: ModelCheckpointInfo[];
-  isScoring: boolean;
   scoreById: Record<string, number>;
 
   refreshModelStatus: () => Promise<void>;
@@ -31,7 +33,6 @@ export const useAIStore = create<AIState>((set, get) => ({
   hasModel: false,
   activeModelInfo: null,
   checkpoints: [],
-  isScoring: false,
   scoreById: {},
 
   refreshModelStatus: async () => {
@@ -46,34 +47,57 @@ export const useAIStore = create<AIState>((set, get) => ({
     await get().refreshModelStatus();
   },
 
-  scoreAssets: async (assets: MediaAsset[]) => {
-    const scores = new Map<string, number>();
-    if (assets.length === 0) return scores;
+  scoreAssets: (assets: MediaAsset[]) => {
+    const run = async (): Promise<Map<string, number>> => {
+      const scores = new Map<string, number>();
+      if (assets.length === 0) return scores;
 
-    const exists = await hasActiveModel();
-    if (!exists) {
-      for (const a of assets) scores.set(a.id, 0.5);
-      set({scoreById: Object.fromEntries(scores)});
-      return scores;
-    }
-
-    set({isScoring: true});
-    try {
-      const CHUNK = 64;
-      for (let i = 0; i < assets.length; i += CHUNK) {
-        const chunk = assets.slice(i, i + CHUNK);
-        const chunkScores = await predictScores(chunk.map(a => a.uri));
-        chunk.forEach((asset, idx) => {
-          scores.set(asset.id, chunkScores[idx] ?? 0.5);
-        });
+      // Reuse cached scores — never re-predict the same asset.
+      const need: MediaAsset[] = [];
+      for (const a of assets) {
+        const existing = get().scoreById[a.id];
+        if (existing !== undefined) {
+          scores.set(a.id, existing);
+        } else {
+          need.push(a);
+        }
       }
-      set(state => ({
-        scoreById: {...state.scoreById, ...Object.fromEntries(scores)},
-      }));
-    } finally {
-      set({isScoring: false});
-    }
-    return scores;
+      if (need.length === 0) return scores;
+
+      const exists = await hasActiveModel();
+      if (!exists) {
+        const defaults: Record<string, number> = {};
+        for (const a of need) {
+          defaults[a.id] = 0.5;
+          scores.set(a.id, 0.5);
+        }
+        set(state => ({scoreById: {...state.scoreById, ...defaults}}));
+        return scores;
+      }
+
+      const CHUNK = 64;
+      for (let i = 0; i < need.length; i += CHUNK) {
+        const chunk = need.slice(i, i + CHUNK);
+        const chunkScores = await predictScores(chunk.map(a => a.uri));
+        const published: Record<string, number> = {};
+        chunk.forEach((asset, idx) => {
+          const value = chunkScores[idx] ?? 0.5;
+          published[asset.id] = value;
+          scores.set(asset.id, value);
+        });
+        set(state => ({
+          scoreById: {...state.scoreById, ...published},
+        }));
+      }
+      return scores;
+    };
+
+    const result = scoreChain.then(run, run);
+    scoreChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   },
 
   clearScores: () => set({scoreById: {}}),
