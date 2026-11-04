@@ -1,22 +1,60 @@
-import React, {useCallback, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {Dimensions, StyleSheet, View} from 'react-native';
 import Animated, {
+  cancelAnimation,
+  useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
-  withTiming,
   withSpring,
   runOnJS,
   interpolate,
-  interpolateColor,
   Extrapolation,
-  Easing,
 } from 'react-native-reanimated';
 import {Gesture, GestureDetector} from 'react-native-gesture-handler';
 
 const {width: SCREEN_WIDTH} = Dimensions.get('window');
 const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.25;
-const EXIT_DISTANCE = SCREEN_WIDTH * 1.3;
-const EXIT_DURATION_MS = 350;
+const VELOCITY_THRESHOLD = 800;
+const EXIT_DISTANCE = SCREEN_WIDTH * 1.5;
+const RECYCLE_DISTANCE = SCREEN_WIDTH;
+
+function exitSpring(velocity: number) {
+  'worklet';
+  return {
+    damping: 20,
+    stiffness: 200,
+    mass: 1,
+    velocity,
+    overshootClamping: true,
+  };
+}
+
+function returnSpring(velocity: number) {
+  'worklet';
+  return {
+    damping: 120,
+    stiffness: 900,
+    mass: 4,
+    velocity,
+  };
+}
+
+function cardTransform(translateX: number, translateY: number) {
+  'worklet';
+  const rotation = interpolate(
+    translateX,
+    [-SCREEN_WIDTH, 0, SCREEN_WIDTH],
+    [-10, 0, 10],
+    Extrapolation.CLAMP,
+  );
+  return [
+    {translateX},
+    {translateY},
+    {rotateZ: `${rotation}deg`},
+  ];
+}
+
+type SwipeDirection = 'left' | 'right';
 
 interface SwipeCardProps {
   children: React.ReactNode;
@@ -38,122 +76,234 @@ export function SwipeCard({
   const translateY0 = useSharedValue(0);
   const translateX1 = useSharedValue(0);
   const translateY1 = useSharedValue(0);
-  const isAnimatingExit = useSharedValue(0);
+  const startX0 = useSharedValue(0);
+  const startY0 = useSharedValue(0);
+  const startX1 = useSharedValue(0);
+  const startY1 = useSharedValue(0);
+
+  /** -1 = none, 0 | 1 = slot flying off screen */
+  const flyingSlot = useSharedValue(-1);
+  /** 0 = none, 1 = left, 2 = right */
+  const pendingCommit = useSharedValue(0);
 
   const topSlotSV = useSharedValue(0);
   const [topSlot, setTopSlot] = useState(0);
 
+  useEffect(() => {
+    topSlotSV.value = topSlot;
+  }, [topSlot, topSlotSV]);
+
   const slot0Content = topSlot === 0 ? children : behindContent;
   const slot1Content = topSlot === 0 ? behindContent : children;
 
-  const advanceIndex = useCallback(
-    (direction: 'left' | 'right') => {
-      if (topSlot === 0) {
-        translateX0.value = 0;
-        translateY0.value = 0;
-      } else {
-        translateX1.value = 0;
-        translateY1.value = 0;
-      }
-
+  const applyAdvance = useCallback(
+    (direction: SwipeDirection, newTopSlot: 0 | 1) => {
       if (direction === 'left') {
         onSwipeLeft();
       } else {
         onSwipeRight();
       }
-      setTopSlot(prev => (prev === 0 ? 1 : 0));
+      setTopSlot(newTopSlot);
     },
-    [topSlot, onSwipeLeft, onSwipeRight, translateX0, translateY0, translateX1, translateY1],
+    [onSwipeLeft, onSwipeRight],
   );
 
-  const panGesture = Gesture.Pan()
-    .enabled(enabled)
-    .onUpdate(event => {
-      if (isAnimatingExit.value === 1) {
+  const panGesture = useMemo(() => {
+    const shouldCommitLeft = (x: number, vx: number) => {
+      'worklet';
+      return (
+        x < -SWIPE_THRESHOLD ||
+        (Math.abs(vx) > VELOCITY_THRESHOLD && vx < 0)
+      );
+    };
+
+    const shouldCommitRight = (x: number, vx: number) => {
+      'worklet';
+      return (
+        x > SWIPE_THRESHOLD ||
+        (Math.abs(vx) > VELOCITY_THRESHOLD && vx > 0)
+      );
+    };
+
+    const springFlyingOff = (
+      slot: 0 | 1,
+      direction: SwipeDirection,
+      vx: number,
+      vy: number,
+    ) => {
+      'worklet';
+      const tx = slot === 0 ? translateX0 : translateX1;
+      const ty = slot === 0 ? translateY0 : translateY1;
+      const target = direction === 'left' ? -EXIT_DISTANCE : EXIT_DISTANCE;
+      tx.value = withSpring(target, exitSpring(vx), finished => {
+        if (!finished) {
+          return;
+        }
+      });
+      ty.value = withSpring(0, exitSpring(vy));
+    };
+
+    const beginFly = (
+      slot: 0 | 1,
+      direction: SwipeDirection,
+      vx: number,
+      vy: number,
+    ) => {
+      'worklet';
+      if (flyingSlot.value !== -1) {
+        pendingCommit.value = direction === 'left' ? 1 : 2;
         return;
       }
-      if (topSlotSV.value === 0) {
-        translateX0.value = event.translationX;
-        translateY0.value = event.translationY * 0.15;
-      } else {
-        translateX1.value = event.translationX;
-        translateY1.value = event.translationY * 0.15;
+      flyingSlot.value = slot;
+      topSlotSV.value = slot === 0 ? 1 : 0;
+      springFlyingOff(slot, direction, vx, vy);
+    };
+
+    return Gesture.Pan()
+      .enabled(enabled)
+      .onBegin(() => {
+        const active = topSlotSV.value === 0 ? 0 : 1;
+        if (active === 0) {
+          cancelAnimation(translateX0);
+          cancelAnimation(translateY0);
+          startX0.value = translateX0.value;
+          startY0.value = translateY0.value;
+        } else {
+          cancelAnimation(translateX1);
+          cancelAnimation(translateY1);
+          startX1.value = translateX1.value;
+          startY1.value = translateY1.value;
+        }
+      })
+      .onUpdate(event => {
+        const active = topSlotSV.value === 0 ? 0 : 1;
+        if (active === 0 && flyingSlot.value === 0) {
+          return;
+        }
+        if (active === 1 && flyingSlot.value === 1) {
+          return;
+        }
+        if (active === 0) {
+          translateX0.value = startX0.value + event.translationX;
+          translateY0.value = startY0.value + event.translationY * 0.15;
+        } else {
+          translateX1.value = startX1.value + event.translationX;
+          translateY1.value = startY1.value + event.translationY * 0.15;
+        }
+      })
+      .onEnd(event => {
+        const active = topSlotSV.value === 0 ? 0 : 1;
+        if (active === 0 && flyingSlot.value === 0) {
+          return;
+        }
+        if (active === 1 && flyingSlot.value === 1) {
+          return;
+        }
+
+        const tx = active === 0 ? translateX0 : translateX1;
+        const ty = active === 0 ? translateY0 : translateY1;
+        const x = tx.value;
+        const vx = event.velocityX;
+        const vy = event.velocityY;
+
+        if (shouldCommitLeft(x, vx)) {
+          beginFly(active, 'left', vx, vy);
+          return;
+        }
+        if (shouldCommitRight(x, vx)) {
+          beginFly(active, 'right', vx, vy);
+          return;
+        }
+
+        tx.value = withSpring(0, returnSpring(vx));
+        ty.value = withSpring(0, returnSpring(vy));
+      });
+  }, [
+    enabled,
+    applyAdvance,
+    flyingSlot,
+    pendingCommit,
+    startX0,
+    startY0,
+    startX1,
+    startY1,
+    topSlotSV,
+    translateX0,
+    translateX1,
+    translateY0,
+    translateY1,
+  ]);
+
+  useAnimatedReaction(
+    () => {
+      const fs = flyingSlot.value;
+      if (fs === 0) {
+        return Math.abs(translateX0.value);
       }
-    })
-    .onEnd(event => {
-      if (isAnimatingExit.value === 1) {
+      if (fs === 1) {
+        return Math.abs(translateX1.value);
+      }
+      return 0;
+    },
+    (absX, prev) => {
+      if (flyingSlot.value === -1) {
         return;
       }
-
-      const isSlot0 = topSlotSV.value === 0;
-      const tx = isSlot0 ? translateX0 : translateX1;
-      const ty = isSlot0 ? translateY0 : translateY1;
-
-      if (event.translationX < -SWIPE_THRESHOLD) {
-        isAnimatingExit.value = 1;
-        tx.value = withTiming(
-          -EXIT_DISTANCE,
-          {duration: EXIT_DURATION_MS, easing: Easing.inOut(Easing.ease)},
-          finished => {
-            if (finished) {
-              topSlotSV.value = isSlot0 ? 1 : 0;
-              isAnimatingExit.value = 0;
-              runOnJS(advanceIndex)('left');
-            }
-          },
-        );
-      } else if (event.translationX > SWIPE_THRESHOLD) {
-        isAnimatingExit.value = 1;
-        tx.value = withTiming(
-          EXIT_DISTANCE,
-          {duration: EXIT_DURATION_MS, easing: Easing.inOut(Easing.ease)},
-          finished => {
-            if (finished) {
-              topSlotSV.value = isSlot0 ? 1 : 0;
-              isAnimatingExit.value = 0;
-              runOnJS(advanceIndex)('right');
-            }
-          },
-        );
-      } else {
-        tx.value = withSpring(0, {damping: 20, stiffness: 200});
-        ty.value = withSpring(0, {damping: 20, stiffness: 200});
+      if (absX < RECYCLE_DISTANCE) {
+        return;
       }
-    });
+      if (prev !== null && absX <= prev) {
+        return;
+      }
+      const fs = flyingSlot.value;
+      const direction: SwipeDirection =
+        fs === 0
+          ? translateX0.value < 0
+            ? 'left'
+            : 'right'
+          : translateX1.value < 0
+            ? 'left'
+            : 'right';
 
-  // ── Slot 0 animated style ──────────────────────────────────────────
+      const tx = fs === 0 ? translateX0 : translateX1;
+      const ty = fs === 0 ? translateY0 : translateY1;
+      cancelAnimation(tx);
+      cancelAnimation(ty);
+      tx.value = 0;
+      ty.value = 0;
+      flyingSlot.value = -1;
+      const newTop = topSlotSV.value === 0 ? 0 : 1;
+      runOnJS(applyAdvance)(direction, newTop);
+
+      const pending = pendingCommit.value;
+      if (pending !== 0) {
+        pendingCommit.value = 0;
+        const pendingDir: SwipeDirection = pending === 1 ? 'left' : 'right';
+        const activeSlot = topSlotSV.value === 0 ? 0 : 1;
+        flyingSlot.value = activeSlot;
+        topSlotSV.value = activeSlot === 0 ? 1 : 0;
+        const ptx = activeSlot === 0 ? translateX0 : translateX1;
+        const pty = activeSlot === 0 ? translateY0 : translateY1;
+        const target =
+          pendingDir === 'left' ? -EXIT_DISTANCE : EXIT_DISTANCE;
+        ptx.value = withSpring(target, exitSpring(0));
+        pty.value = withSpring(0, exitSpring(0));
+      }
+    },
+    [applyAdvance],
+  );
 
   const slot0Style = useAnimatedStyle(() => {
-    if (topSlotSV.value === 0) {
-      const rotation = interpolate(
-        translateX0.value,
-        [-SCREEN_WIDTH, 0, SCREEN_WIDTH],
-        [-10, 0, 10],
-        Extrapolation.CLAMP,
-      );
-      const absX = Math.abs(translateX0.value);
+    if (flyingSlot.value === 0 || topSlotSV.value === 0) {
       return {
-        zIndex: 2,
+        zIndex: flyingSlot.value === 0 ? 3 : 2,
         opacity: 1,
-        transform: [
-          {translateX: translateX0.value},
-          {translateY: translateY0.value},
-          {rotateZ: `${rotation}deg`},
-        ],
-        borderWidth: interpolate(
-          absX,
-          [0, SWIPE_THRESHOLD * 0.4, SWIPE_THRESHOLD],
-          [0, 1.5, 4],
-          Extrapolation.CLAMP,
-        ),
-        borderColor: interpolateColor(
-          translateX0.value,
-          [-SWIPE_THRESHOLD, -SWIPE_THRESHOLD * 0.2, 0, SWIPE_THRESHOLD * 0.2, SWIPE_THRESHOLD],
-          ['#ff3b30', '#ff3b3000', 'transparent', '#34c75900', '#34c759'],
-        ),
+        transform: cardTransform(translateX0.value, translateY0.value),
       };
     }
-    const absX = Math.abs(translateX1.value);
+    const absX = Math.abs(
+      topSlotSV.value === 1 ? translateX1.value : translateX0.value,
+    );
     return {
       zIndex: 1,
       opacity: interpolate(
@@ -172,44 +322,20 @@ export function SwipeCard({
           ),
         },
       ],
-      borderWidth: 0,
-      borderColor: 'transparent',
     };
   });
-
-  // ── Slot 1 animated style ──────────────────────────────────────────
 
   const slot1Style = useAnimatedStyle(() => {
-    if (topSlotSV.value === 1) {
-      const rotation = interpolate(
-        translateX1.value,
-        [-SCREEN_WIDTH, 0, SCREEN_WIDTH],
-        [-10, 0, 10],
-        Extrapolation.CLAMP,
-      );
-      const absX = Math.abs(translateX1.value);
+    if (flyingSlot.value === 1 || topSlotSV.value === 1) {
       return {
-        zIndex: 2,
+        zIndex: flyingSlot.value === 1 ? 3 : 2,
         opacity: 1,
-        transform: [
-          {translateX: translateX1.value},
-          {translateY: translateY1.value},
-          {rotateZ: `${rotation}deg`},
-        ],
-        borderWidth: interpolate(
-          absX,
-          [0, SWIPE_THRESHOLD * 0.4, SWIPE_THRESHOLD],
-          [0, 1.5, 4],
-          Extrapolation.CLAMP,
-        ),
-        borderColor: interpolateColor(
-          translateX1.value,
-          [-SWIPE_THRESHOLD, -SWIPE_THRESHOLD * 0.2, 0, SWIPE_THRESHOLD * 0.2, SWIPE_THRESHOLD],
-          ['#ff3b30', '#ff3b3000', 'transparent', '#34c75900', '#34c759'],
-        ),
+        transform: cardTransform(translateX1.value, translateY1.value),
       };
     }
-    const absX = Math.abs(translateX0.value);
+    const absX = Math.abs(
+      topSlotSV.value === 0 ? translateX0.value : translateX1.value,
+    );
     return {
       zIndex: 1,
       opacity: interpolate(
@@ -228,16 +354,12 @@ export function SwipeCard({
           ),
         },
       ],
-      borderWidth: 0,
-      borderColor: 'transparent',
     };
   });
-
-  // ── Indicator styles per slot ──────────────────────────────────────
 
   const slot0DeleteStyle = useAnimatedStyle(() => ({
     opacity:
-      topSlotSV.value === 0
+      topSlotSV.value === 0 && flyingSlot.value !== 0
         ? interpolate(
             translateX0.value,
             [-SWIPE_THRESHOLD, -SWIPE_THRESHOLD * 0.3, 0],
@@ -249,7 +371,7 @@ export function SwipeCard({
 
   const slot0KeepStyle = useAnimatedStyle(() => ({
     opacity:
-      topSlotSV.value === 0
+      topSlotSV.value === 0 && flyingSlot.value !== 0
         ? interpolate(
             translateX0.value,
             [0, SWIPE_THRESHOLD * 0.3, SWIPE_THRESHOLD],
@@ -261,7 +383,7 @@ export function SwipeCard({
 
   const slot1DeleteStyle = useAnimatedStyle(() => ({
     opacity:
-      topSlotSV.value === 1
+      topSlotSV.value === 1 && flyingSlot.value !== 1
         ? interpolate(
             translateX1.value,
             [-SWIPE_THRESHOLD, -SWIPE_THRESHOLD * 0.3, 0],
@@ -273,7 +395,7 @@ export function SwipeCard({
 
   const slot1KeepStyle = useAnimatedStyle(() => ({
     opacity:
-      topSlotSV.value === 1
+      topSlotSV.value === 1 && flyingSlot.value !== 1
         ? interpolate(
             translateX1.value,
             [0, SWIPE_THRESHOLD * 0.3, SWIPE_THRESHOLD],
@@ -359,11 +481,6 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: '#1a1a1a',
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
   },
   indicator: {
     position: 'absolute',
