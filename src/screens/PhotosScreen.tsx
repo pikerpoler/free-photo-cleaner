@@ -41,7 +41,6 @@ export function PhotosScreen() {
   } = useQueueStore();
 
   const {photoSort, photoFilters, dateFilter} = useSettingsStore();
-  const scoreAssets = useAIStore(s => s.scoreAssets);
 
   const photoFiltersRef = React.useRef(photoFilters);
   const dateFilterRef = React.useRef(dateFilter);
@@ -81,20 +80,6 @@ export function PhotosScreen() {
   const nextScore = useAIStore(s =>
     nextId ? s.scoreById[nextId] : undefined,
   );
-
-  // Score visible cards if the AI queue painted before scores landed.
-  useEffect(() => {
-    if (!showScores || !currentAsset) return;
-    const {scoreById} = useAIStore.getState();
-    const missing = [currentAsset, nextAsset].filter(
-      (a): a is NonNullable<typeof a> =>
-        !!a && scoreById[a.id] === undefined,
-    );
-    if (missing.length === 0) return;
-    scoreAssets(missing);
-    // Depend on ids only — avoid re-running on scoreById / queue identity churn.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showScores, currentId, nextId, scoreAssets]);
 
   const handleSwipeLeft = useCallback(() => {
     swipeLeft('photo');
@@ -152,7 +137,7 @@ export function PhotosScreen() {
       <View style={[styles.center, isDark && styles.bgDark]}>
         <ActivityIndicator size="large" color="#007AFF" />
         <Text style={[styles.loadingText, isDark && styles.textDark]}>
-          Loading photos...
+          {photoSort === 'ai' ? 'Scoring photos...' : 'Loading photos...'}
         </Text>
         {trainModal}
       </View>

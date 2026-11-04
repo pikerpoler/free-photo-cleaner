@@ -33,7 +33,7 @@ export const MediaCard = React.memo(
           )}
           {showScore && (
             <Text style={[styles.metaText, styles.scoreText]}>
-              {score != null ? `AI ${score.toFixed(2)}` : 'AI …'}
+              {score != null ? `AI-Score ${score.toFixed(2)}` : ' '}
             </Text>
           )}
         </View>

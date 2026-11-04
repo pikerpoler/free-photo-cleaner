@@ -74,6 +74,15 @@ let currentPhotoFilters: PhotoFilters | undefined;
 let currentVideoFilters: VideoFilters | undefined;
 let currentDateFilter: DateFilter | undefined;
 
+/** Max scored photos ahead of (and including) the current card for AI sort. */
+const AI_QUEUE_CAP = 100;
+/** Unscored candidates scored per refill pass. */
+const AI_SCORE_BATCH = 32;
+/** Kick another refill when remaining scored cards drop below this. */
+const AI_REFILL_THRESHOLD = 50;
+
+let aiFillInFlight = false;
+
 function dedupeById(assets: MediaAsset[]): MediaAsset[] {
   const seen = new Set<string>();
   const out: MediaAsset[] = [];
@@ -98,16 +107,9 @@ function mergeUnique(existing: MediaAsset[], batch: MediaAsset[]): MediaAsset[] 
 }
 
 function sortAssets(assets: MediaAsset[], mode: SortMode): MediaAsset[] {
-  if (mode === 'ai') {
-    const sorted = [...assets];
-    for (let i = sorted.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [sorted[i], sorted[j]] = [sorted[j], sorted[i]];
-    }
-    return sorted;
-  }
   const sorted = [...assets];
   switch (mode) {
+    case 'ai':
     case 'random':
       for (let i = sorted.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -125,16 +127,181 @@ function sortAssets(assets: MediaAsset[], mode: SortMode): MediaAsset[] {
   }
 }
 
-async function sortAssetsAI(assets: MediaAsset[]): Promise<MediaAsset[]> {
-  const aiStore = useAIStore.getState();
-  const scores = await aiStore.scoreAssets(assets);
-  const sorted = [...assets];
-  sorted.sort((a, b) => {
-    const scoreA = scores.get(a.id) ?? 0.5;
-    const scoreB = scores.get(b.id) ?? 0.5;
-    return scoreB - scoreA;
-  });
-  return sorted;
+function sampleRandom<T>(arr: T[], n: number): T[] {
+  if (arr.length <= n) return [...arr];
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, n);
+}
+
+function filterEligible(
+  raw: MediaAsset[],
+  type: MediaType,
+  photoFilters?: PhotoFilters,
+  videoFilters?: VideoFilters,
+  dateFilter?: DateFilter,
+): MediaAsset[] {
+  const keptIds = getKeptAssetIds();
+  const pendingIds = getPendingDeleteIds();
+
+  let assets = raw.filter(a => !keptIds.has(a.id) && !pendingIds.has(a.id));
+
+  if (dateFilter) {
+    assets = applyDateFilter(assets, dateFilter);
+  }
+
+  if (type === 'photo' && photoFilters) {
+    assets = applyPhotoFilters(assets, photoFilters);
+  } else if (type === 'video' && videoFilters) {
+    assets = applyVideoFilters(assets, videoFilters);
+  }
+
+  return assets;
+}
+
+function buildScoredRemainder(
+  eligible: MediaAsset[],
+  frozenIds: Set<string>,
+  scoreById: Record<string, number>,
+  cap: number,
+): MediaAsset[] {
+  const scored = eligible.filter(
+    a => !frozenIds.has(a.id) && scoreById[a.id] !== undefined,
+  );
+  scored.sort((a, b) => (scoreById[b.id] ?? 0) - (scoreById[a.id] ?? 0));
+  return scored.slice(0, Math.max(0, cap));
+}
+
+function rebuildAIQueueFromScores(get: () => QueueState): {
+  queue: MediaAsset[];
+  index: number;
+  remaining: number;
+  unscoredCount: number;
+  eligibleCount: number;
+} {
+  const state = get();
+  const scoreById = useAIStore.getState().scoreById;
+  const eligible = filterEligible(
+    photoRawCache,
+    'photo',
+    currentPhotoFilters,
+    undefined,
+    currentDateFilter,
+  );
+  const unscoredCount = eligible.filter(
+    a => scoreById[a.id] === undefined,
+  ).length;
+
+  const index = state.photoIndex;
+  const past = state.photoQueue.slice(0, index);
+  const current = state.photoQueue[index];
+  const frozenIds = new Set(past.map(a => a.id));
+  if (current) frozenIds.add(current.id);
+
+  // Drop past/current if they are no longer eligible (kept/pending/filtered out).
+  const eligibleIds = new Set(eligible.map(a => a.id));
+  const pastKept = past.filter(a => eligibleIds.has(a.id));
+  const currentKept =
+    current && eligibleIds.has(current.id) ? current : undefined;
+
+  const aheadCap = currentKept ? AI_QUEUE_CAP - 1 : AI_QUEUE_CAP;
+  const frozenForAhead = new Set(pastKept.map(a => a.id));
+  if (currentKept) frozenForAhead.add(currentKept.id);
+
+  const ahead = buildScoredRemainder(
+    eligible,
+    frozenForAhead,
+    scoreById,
+    aheadCap,
+  );
+
+  const queue = currentKept
+    ? [...pastKept, currentKept, ...ahead]
+    : ahead;
+  const nextIndex = currentKept ? pastKept.length : 0;
+  const remaining = queue.length - nextIndex;
+
+  return {
+    queue,
+    index: nextIndex,
+    remaining,
+    unscoredCount,
+    eligibleCount: eligible.length,
+  };
+}
+
+async function ensureAIQueueFilled(
+  set: (
+    partial:
+      | Partial<QueueState>
+      | ((state: QueueState) => Partial<QueueState>),
+  ) => void,
+  get: () => QueueState,
+): Promise<void> {
+  if (currentPhotoSort !== 'ai') return;
+  if (aiFillInFlight) return;
+  aiFillInFlight = true;
+
+  try {
+    while (currentPhotoSort === 'ai') {
+      const built = rebuildAIQueueFromScores(get);
+      const stillNeedScores =
+        built.remaining < AI_QUEUE_CAP && built.unscoredCount > 0;
+
+      set({
+        photoQueue: built.queue,
+        photoIndex: built.index,
+        isLoadingPhotos:
+          built.queue.length === 0 &&
+          (stillNeedScores || photoRawCache.length === 0),
+      });
+
+      if (!stillNeedScores) {
+        if (built.queue.length > 0 || built.unscoredCount === 0) {
+          set({isLoadingPhotos: false});
+        }
+        break;
+      }
+
+      const scoreById = useAIStore.getState().scoreById;
+      const eligible = filterEligible(
+        photoRawCache,
+        'photo',
+        currentPhotoFilters,
+        undefined,
+        currentDateFilter,
+      );
+      const unscored = eligible.filter(a => scoreById[a.id] === undefined);
+      if (unscored.length === 0) {
+        set({isLoadingPhotos: false});
+        break;
+      }
+
+      const batch = sampleRandom(unscored, AI_SCORE_BATCH);
+      await useAIStore.getState().scoreAssets(batch);
+    }
+  } finally {
+    aiFillInFlight = false;
+  }
+}
+
+function maybeRefillAIQueue(
+  set: (
+    partial:
+      | Partial<QueueState>
+      | ((state: QueueState) => Partial<QueueState>),
+  ) => void,
+  get: () => QueueState,
+): void {
+  if (currentPhotoSort !== 'ai') return;
+  const state = get();
+  const remaining = state.photoQueue.length - state.photoIndex;
+  if (remaining < AI_REFILL_THRESHOLD) {
+    void ensureAIQueueFilled(set, get);
+  }
 }
 
 function applyDateFilter(
@@ -193,22 +360,10 @@ function filterAndSort(
   videoFilters?: VideoFilters,
   dateFilter?: DateFilter,
 ): MediaAsset[] {
-  const keptIds = getKeptAssetIds();
-  const pendingIds = getPendingDeleteIds();
-
-  let assets = raw.filter(a => !keptIds.has(a.id) && !pendingIds.has(a.id));
-
-  if (dateFilter) {
-    assets = applyDateFilter(assets, dateFilter);
-  }
-
-  if (type === 'photo' && photoFilters) {
-    assets = applyPhotoFilters(assets, photoFilters);
-  } else if (type === 'video' && videoFilters) {
-    assets = applyVideoFilters(assets, videoFilters);
-  }
-
-  return sortAssets(assets, sort);
+  return sortAssets(
+    filterEligible(raw, type, photoFilters, videoFilters, dateFilter),
+    sort,
+  );
 }
 
 function catalogDateBounds(dateFilter?: DateFilter): {
@@ -239,6 +394,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   loadQueue: (type, sort, photoFilters, videoFilters, dateFilter) => {
     const isPhoto = type === 'photo';
+    const isAI = isPhoto && sort === 'ai';
 
     if (isPhoto) {
       photoLoadController?.cancel();
@@ -272,29 +428,39 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       } else {
         videoRawCache = catalog;
       }
-      const queue = filterAndSort(
-        catalog,
-        type,
-        sort,
-        pf,
-        vf,
-        dateFilter,
-      );
-      set({
-        [queueKey]: queue,
-        [indexKey]: 0,
-        [loadingKey]: false,
-        [loadingMoreKey]: true,
-      });
-      if (sort === 'ai' && isPhoto) {
-        sortAssetsAI(queue).then(aiSorted => {
-          if (currentPhotoSort === 'ai') {
-            set({[queueKey]: aiSorted, [indexKey]: 0});
-          }
+
+      if (isAI) {
+        // Never paint unscored/random cards — fill from scores only.
+        set({
+          photoQueue: [],
+          photoIndex: 0,
+          isLoadingPhotos: true,
+          isLoadingPhotosMore: true,
+        });
+        void ensureAIQueueFilled(set, get);
+      } else {
+        const queue = filterAndSort(
+          catalog,
+          type,
+          sort,
+          pf,
+          vf,
+          dateFilter,
+        );
+        set({
+          [queueKey]: queue,
+          [indexKey]: 0,
+          [loadingKey]: false,
+          [loadingMoreKey]: true,
         });
       }
     } else {
-      set({[loadingKey]: true, [loadingMoreKey]: false});
+      set({
+        [queueKey]: [],
+        [indexKey]: 0,
+        [loadingKey]: true,
+        [loadingMoreKey]: false,
+      });
     }
 
     let isFirstBatch = catalog.length === 0;
@@ -318,6 +484,22 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         const currentSort = isPhoto ? currentPhotoSort : currentVideoSort;
         const curPf = isPhoto ? currentPhotoFilters : undefined;
         const curVf = isPhoto ? undefined : currentVideoFilters;
+        const aiMode = isPhoto && currentSort === 'ai';
+
+        if (aiMode) {
+          // Catalog/rawCache only — never shuffle unscored into photoQueue.
+          if (done) {
+            if (!currentDateFilter?.enabled) {
+              pruneCatalogToIds(type, seenIds);
+              photoRawCache = getCatalogAssets(type);
+            }
+            set({isLoadingPhotosMore: false});
+          } else {
+            set({isLoadingPhotosMore: true});
+          }
+          void ensureAIQueueFilled(set, get);
+          return;
+        }
 
         if (isFirstBatch) {
           isFirstBatch = false;
@@ -335,19 +517,11 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             [loadingKey]: false,
             [loadingMoreKey]: !done,
           });
-          if (currentSort === 'ai' && isPhoto) {
-            sortAssetsAI(queue).then(aiSorted => {
-              if (currentPhotoSort === 'ai') {
-                set({[queueKey]: aiSorted, [indexKey]: 0});
-              }
-            });
-          }
         } else if (done) {
           // Full library sync without date filter on CameraRoll when catalog warm
           // — still prune using all seen IDs from this sync pass
           if (!currentDateFilter?.enabled) {
             pruneCatalogToIds(type, seenIds);
-            // Refresh raw cache from catalog after prune
             const refreshed = getCatalogAssets(type);
             if (isPhoto) {
               photoRawCache = refreshed;
@@ -370,21 +544,19 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             curVf,
             currentDateFilter,
           );
-          const merged = [...frozenPrefix, ...remainder];
-          set({[queueKey]: merged, [loadingMoreKey]: false, [loadingKey]: false});
-
-          if (currentSort === 'ai' && isPhoto) {
-            sortAssetsAI(remainder).then(aiSorted => {
-              if (currentPhotoSort === 'ai') {
-                set({[queueKey]: [...frozenPrefix, ...aiSorted]});
-              }
-            });
-          }
+          set({
+            [queueKey]: [...frozenPrefix, ...remainder],
+            [loadingMoreKey]: false,
+            [loadingKey]: false,
+          });
         } else {
-          // Intermediate: update remaining count from accumulating cache without resetting index
+          // Intermediate: update remaining without resetting index
           const currentQueue = isPhoto ? get().photoQueue : get().videoQueue;
           const currentIndex = isPhoto ? get().photoIndex : get().videoIndex;
-          const frozenPrefix = currentQueue.slice(0, Math.min(currentIndex + 1, currentQueue.length));
+          const frozenPrefix = currentQueue.slice(
+            0,
+            Math.min(currentIndex + 1, currentQueue.length),
+          );
           const frozenIds = new Set(frozenPrefix.map(a => a.id));
           const unfrozenRaw = rawCache.filter(a => !frozenIds.has(a.id));
           const remainder = filterAndSort(
@@ -424,6 +596,19 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
     if (rawCache.length === 0) return;
 
+    const queueKey = isPhoto ? 'photoQueue' : 'videoQueue';
+    const indexKey = isPhoto ? 'photoIndex' : 'videoIndex';
+
+    if (isPhoto && sort === 'ai') {
+      set({
+        photoQueue: [],
+        photoIndex: 0,
+        isLoadingPhotos: true,
+      });
+      void ensureAIQueueFilled(set, get);
+      return;
+    }
+
     const pf = isPhoto ? currentPhotoFilters : undefined;
     const vf = isPhoto ? undefined : currentVideoFilters;
     const queue = filterAndSort(
@@ -435,17 +620,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       currentDateFilter,
     );
 
-    const queueKey = isPhoto ? 'photoQueue' : 'videoQueue';
-    const indexKey = isPhoto ? 'photoIndex' : 'videoIndex';
-    set({[queueKey]: queue, [indexKey]: 0});
-
-    if (sort === 'ai' && isPhoto) {
-      sortAssetsAI(queue).then(aiSorted => {
-        if (currentPhotoSort === 'ai') {
-          set({[queueKey]: aiSorted, [indexKey]: 0});
-        }
-      });
-    }
+    set({[queueKey]: queue, [indexKey]: 0, isLoadingPhotos: false});
   },
 
   swipeLeft: (type: MediaType) => {
@@ -478,6 +653,10 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       [countKey]: currentCount + 1,
       [stackKey]: [...currentStack, {type: 'delete', asset, queue: type}],
     });
+
+    if (type === 'photo') {
+      maybeRefillAIQueue(set, get);
+    }
   },
 
   swipeRight: (type: MediaType) => {
@@ -499,6 +678,10 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       [indexKey]: index + 1,
       [stackKey]: [...currentStack, {type: 'keep', asset, queue: type}],
     });
+
+    if (type === 'photo') {
+      maybeRefillAIQueue(set, get);
+    }
   },
 
   flushDeletes: async (type: MediaType) => {
@@ -583,27 +766,22 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   resetAIQueue: async () => {
     useAIStore.getState().clearScores();
-    const rawCache = photoRawCache;
-    if (rawCache.length === 0) return;
+    if (photoRawCache.length === 0) return;
 
-    const sort = currentPhotoSort;
-    const pf = currentPhotoFilters;
+    if (currentPhotoSort === 'ai') {
+      set({photoQueue: [], photoIndex: 0, isLoadingPhotos: true});
+      await ensureAIQueueFilled(set, get);
+      return;
+    }
+
     const queue = filterAndSort(
-      rawCache,
+      photoRawCache,
       'photo',
-      sort,
-      pf,
+      currentPhotoSort,
+      currentPhotoFilters,
       undefined,
       currentDateFilter,
     );
-
-    if (sort === 'ai') {
-      const aiSorted = await sortAssetsAI(queue);
-      if (currentPhotoSort === 'ai') {
-        set({photoQueue: aiSorted, photoIndex: 0});
-      }
-    } else {
-      set({photoQueue: queue, photoIndex: 0});
-    }
+    set({photoQueue: queue, photoIndex: 0});
   },
 }));

@@ -75,7 +75,7 @@ export const useAIStore = create<AIState>((set, get) => ({
         return scores;
       }
 
-      const CHUNK = 64;
+      const CHUNK = 32;
       for (let i = 0; i < need.length; i += CHUNK) {
         const chunk = need.slice(i, i + CHUNK);
         const chunkScores = await predictScores(chunk.map(a => a.uri));

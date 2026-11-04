@@ -142,6 +142,8 @@ class CNNTrainerModule: RCTEventEmitter {
     try? FileManager.default.removeItem(at: modelsDir.appendingPathComponent("active_meta.json"))
     activeModel = nil
     activeModelId = ""
+    tensorCache.removeAll()
+    cacheResize = 0
     resolve(true)
   }
 
@@ -457,17 +459,25 @@ class CNNTrainerModule: RCTEventEmitter {
     }(),
     let metaData = try? Data(contentsOf: metaURL(modelId)),
     let meta = try? JSONSerialization.jsonObject(with: metaData) as? [String: Any],
-    let resize = meta["trainResize"] as? Int,
+    let resize = (meta["trainResize"] as? NSNumber)?.intValue ?? (meta["trainResize"] as? Int),
     let weights = try? Data(contentsOf: weightsURL(modelId)) else {
       return nil
     }
 
     if modelId == "mobilenet-v3-head",
        let m = FrozenBackboneHeadModel.deserialize(weights, inputSize: resize) {
+      if cacheResize != resize {
+        tensorCache.removeAll()
+        cacheResize = resize
+      }
       activeModel = m; activeModelId = modelId; activeResize = resize
       return m
     }
     if let m = loadSequential(modelId: modelId, resize: resize, data: weights) {
+      if cacheResize != resize {
+        tensorCache.removeAll()
+        cacheResize = resize
+      }
       activeModel = m; activeModelId = modelId; activeResize = resize
       return m
     }
@@ -526,12 +536,32 @@ class CNNTrainerModule: RCTEventEmitter {
         return
       }
       let resize = self.activeResize
+      if self.cacheResize != resize {
+        self.tensorCache.removeAll()
+        self.cacheResize = resize
+      }
       var augs = AugConfig()
       augs.normalize = true
       var scores: [Double] = []
       for uri in uris {
-        if let tensor = self.tensorCache[uri] ?? self.decodeImage(uri: uri, size: resize, augs: augs, applyStochastic: false) {
-          if self.tensorCache[uri] == nil { self.tensorCache[uri] = tensor }
+        let cached = self.tensorCache[uri]
+        let reuseCache =
+          cached != nil &&
+          cached!.shape.count >= 3 &&
+          cached!.shape[1] == resize &&
+          cached!.shape[2] == resize
+        let tensor: Tensor?
+        if reuseCache {
+          tensor = cached
+        } else {
+          tensor = self.decodeImage(
+            uri: uri, size: resize, augs: augs, applyStochastic: false, fast: true
+          )
+          if let tensor = tensor {
+            self.tensorCache[uri] = tensor
+          }
+        }
+        if let tensor = tensor {
           let x = self.augmentTensor(tensor, augs: augs, stochastic: false)
           scores.append(Double(model.forward(x)))
         } else {
@@ -608,16 +638,22 @@ class CNNTrainerModule: RCTEventEmitter {
     return t
   }
 
-  private func decodeImage(uri: String, size: Int, augs: AugConfig, applyStochastic: Bool) -> Tensor? {
+  private func decodeImage(
+    uri: String,
+    size: Int,
+    augs: AugConfig,
+    applyStochastic: Bool,
+    fast: Bool = false
+  ) -> Tensor? {
     guard let localId = localIdentifier(from: uri) else { return nil }
     let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [localId], options: nil)
     guard let asset = fetchResult.firstObject else { return nil }
 
     let options = PHImageRequestOptions()
     options.isSynchronous = true
-    options.deliveryMode = .highQualityFormat
+    options.deliveryMode = fast ? .fastFormat : .highQualityFormat
     options.resizeMode = .exact
-    options.isNetworkAccessAllowed = true
+    options.isNetworkAccessAllowed = !fast
 
     // Request larger if crop enabled
     let fetchSize = (augs.randomCrop && applyStochastic) ? Int(Float(size) / max(0.5, augs.cropFraction)) : size
