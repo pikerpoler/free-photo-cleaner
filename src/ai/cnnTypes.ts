@@ -83,10 +83,17 @@ export interface TrainingConfig {
   modelId: TrainableModelId;
   batchSize?: number;
   learningRate?: number;
+  maxEpochs?: number;
   scheduler?: LrSchedulerId;
   stepGamma?: number;
   stepEvery?: number;
   expDecay?: number;
+  logisticC?: number;
+  logisticMaxIter?: number;
+  catboostLearningRate?: number;
+  catboostDepth?: number;
+  catboostMinLeaf?: number;
+  catboostMaxNewTrees?: number;
 }
 
 export interface ModelStatus {

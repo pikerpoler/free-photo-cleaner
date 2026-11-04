@@ -35,6 +35,13 @@ import {
   TrainableModelId,
   TrainingProgress,
 } from '../ai/cnnTypes';
+import {
+  formatMlpLearningRate,
+  mlpBatchSizeToSlider,
+  mlpLearningRateToSlider,
+  sliderToMlpBatchSize,
+  sliderToMlpLearningRate,
+} from '../ai/trainSliderScale';
 
 interface TrainAIScreenProps {
   onClose?: () => void;
@@ -126,16 +133,30 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
     setAIModel,
     aiBatchSize,
     aiStepSize,
+    aiEpochs,
     aiLrScheduler,
     aiStepGamma,
     aiStepSizeEpochs,
     aiExpDecay,
+    aiLogisticC,
+    aiLogisticMaxIter,
+    aiCatboostLearningRate,
+    aiCatboostDepth,
+    aiCatboostMinLeaf,
+    aiCatboostMaxNewTrees,
     setAIBatchSize,
     setAIStepSize,
+    setAIEpochs,
     setAILrScheduler,
     setAIStepGamma,
     setAIStepSizeEpochs,
     setAIExpDecay,
+    setAILogisticC,
+    setAILogisticMaxIter,
+    setAICatboostLearningRate,
+    setAICatboostDepth,
+    setAICatboostMinLeaf,
+    setAICatboostMaxNewTrees,
   } = useSettingsStore();
 
   const {refreshModelStatus, activeModelInfo, hasModel} = useAIStore();
@@ -147,6 +168,12 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [statusText, setStatusText] = useState('');
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
+  const [mlpLrSliderT, setMlpLrSliderT] = useState(() =>
+    mlpLearningRateToSlider(aiStepSize),
+  );
+  const [mlpBatchSliderT, setMlpBatchSliderT] = useState(() =>
+    mlpBatchSizeToSlider(aiBatchSize),
+  );
 
   const mlp = isMlpModel(aiModel);
   const labeledTotal = counts.kept + counts.pendingDelete;
@@ -167,6 +194,14 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
     isTrainerAvailable().then(setAvailable);
     reloadStatus();
   }, [refreshModelStatus, reloadStatus]);
+
+  useEffect(() => {
+    setMlpLrSliderT(mlpLearningRateToSlider(aiStepSize));
+  }, [aiStepSize]);
+
+  useEffect(() => {
+    setMlpBatchSliderT(mlpBatchSizeToSlider(aiBatchSize));
+  }, [aiBatchSize]);
 
   useEffect(() => {
     return subscribeTrainingProgress(p => {
@@ -214,10 +249,17 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
         modelId: aiModel,
         batchSize: aiBatchSize,
         learningRate: aiStepSize,
+        maxEpochs: aiEpochs,
         scheduler: aiLrScheduler,
         stepGamma: aiStepGamma,
         stepEvery: aiStepSizeEpochs,
         expDecay: aiExpDecay,
+        logisticC: aiLogisticC,
+        logisticMaxIter: aiLogisticMaxIter,
+        catboostLearningRate: aiCatboostLearningRate,
+        catboostDepth: aiCatboostDepth,
+        catboostMinLeaf: aiCatboostMinLeaf,
+        catboostMaxNewTrees: aiCatboostMaxNewTrees,
       });
       const acc =
         result.accuracy != null
@@ -245,10 +287,17 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
     aiModel,
     aiBatchSize,
     aiStepSize,
+    aiEpochs,
     aiLrScheduler,
     aiStepGamma,
     aiStepSizeEpochs,
     aiExpDecay,
+    aiLogisticC,
+    aiLogisticMaxIter,
+    aiCatboostLearningRate,
+    aiCatboostDepth,
+    aiCatboostMinLeaf,
+    aiCatboostMaxNewTrees,
     refreshModelStatus,
     reloadStatus,
   ]);
@@ -341,32 +390,144 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
         ))}
       </View>
 
-      {mlp && (
+      {aiModel === 'logistic-l2' && (
         <>
           <Text style={[styles.label, isDark && styles.textDark]}>
-            Batch size: {aiBatchSize}
+            Regularization C: {aiLogisticC.toFixed(2)}
+          </Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={0.01}
+            maximumValue={10}
+            step={0.01}
+            value={aiLogisticC}
+            disabled={isTraining}
+            onSlidingComplete={v => setAILogisticC(parseFloat(v.toFixed(2)))}
+            minimumTrackTintColor="#007AFF"
+          />
+          <Text style={[styles.label, isDark && styles.textDark]}>
+            Max iterations: {aiLogisticMaxIter}
+          </Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={50}
+            maximumValue={2000}
+            step={50}
+            value={aiLogisticMaxIter}
+            disabled={isTraining}
+            onSlidingComplete={v => setAILogisticMaxIter(v)}
+            minimumTrackTintColor="#007AFF"
+          />
+        </>
+      )}
+
+      {aiModel === 'catboost' && (
+        <>
+          <Text style={[styles.label, isDark && styles.textDark]}>
+            Learning rate: {aiCatboostLearningRate.toFixed(2)}
+          </Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={0.01}
+            maximumValue={0.5}
+            step={0.01}
+            value={aiCatboostLearningRate}
+            disabled={isTraining}
+            onSlidingComplete={v =>
+              setAICatboostLearningRate(parseFloat(v.toFixed(2)))
+            }
+            minimumTrackTintColor="#007AFF"
+          />
+          <Text style={[styles.label, isDark && styles.textDark]}>
+            Tree depth: {aiCatboostDepth}
           </Text>
           <Slider
             style={styles.slider}
             minimumValue={1}
-            maximumValue={32}
+            maximumValue={8}
             step={1}
-            value={aiBatchSize}
+            value={aiCatboostDepth}
             disabled={isTraining}
-            onSlidingComplete={v => setAIBatchSize(v)}
+            onSlidingComplete={v => setAICatboostDepth(v)}
             minimumTrackTintColor="#007AFF"
           />
           <Text style={[styles.label, isDark && styles.textDark]}>
-            Learning rate: {aiStepSize.toFixed(4)}
+            Min photos per leaf: {aiCatboostMinLeaf}
           </Text>
           <Slider
             style={styles.slider}
-            minimumValue={0.0001}
-            maximumValue={0.05}
-            step={0.0001}
-            value={aiStepSize}
+            minimumValue={2}
+            maximumValue={32}
+            step={1}
+            value={aiCatboostMinLeaf}
             disabled={isTraining}
-            onSlidingComplete={v => setAIStepSize(parseFloat(v.toFixed(4)))}
+            onSlidingComplete={v => setAICatboostMinLeaf(v)}
+            minimumTrackTintColor="#007AFF"
+          />
+          <Text style={[styles.label, isDark && styles.textDark]}>
+            New trees per train: {aiCatboostMaxNewTrees}
+          </Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={5}
+            maximumValue={100}
+            step={5}
+            value={aiCatboostMaxNewTrees}
+            disabled={isTraining}
+            onSlidingComplete={v => setAICatboostMaxNewTrees(v)}
+            minimumTrackTintColor="#007AFF"
+          />
+        </>
+      )}
+
+      {mlp && (
+        <>
+          <Text style={[styles.label, isDark && styles.textDark]}>
+            Train epochs: {aiEpochs}
+          </Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={10}
+            maximumValue={200}
+            step={5}
+            value={aiEpochs}
+            disabled={isTraining}
+            onSlidingComplete={v => setAIEpochs(v)}
+            minimumTrackTintColor="#007AFF"
+          />
+          <Text style={[styles.label, isDark && styles.textDark]}>
+            Batch size: {sliderToMlpBatchSize(mlpBatchSliderT)}
+          </Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={0}
+            maximumValue={1}
+            value={mlpBatchSliderT}
+            disabled={isTraining}
+            onValueChange={setMlpBatchSliderT}
+            onSlidingComplete={t => {
+              const batch = sliderToMlpBatchSize(t);
+              setAIBatchSize(batch);
+              setMlpBatchSliderT(mlpBatchSizeToSlider(batch));
+            }}
+            minimumTrackTintColor="#007AFF"
+          />
+          <Text style={[styles.label, isDark && styles.textDark]}>
+            Learning rate:{' '}
+            {formatMlpLearningRate(sliderToMlpLearningRate(mlpLrSliderT))}
+          </Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={0}
+            maximumValue={1}
+            value={mlpLrSliderT}
+            disabled={isTraining}
+            onValueChange={setMlpLrSliderT}
+            onSlidingComplete={t => {
+              const lr = sliderToMlpLearningRate(t);
+              setAIStepSize(lr);
+              setMlpLrSliderT(mlpLearningRateToSlider(lr));
+            }}
             minimumTrackTintColor="#007AFF"
           />
           <Text style={[styles.label, isDark && styles.textDark]}>LR scheduler</Text>

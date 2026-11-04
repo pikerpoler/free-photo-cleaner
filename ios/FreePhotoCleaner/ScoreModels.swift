@@ -31,31 +31,50 @@ func makeMetrics(labels: [Float], probs: [Float], innerLoss: Float, epoch: Int, 
 
 // MARK: - Logistic regression with Hessian memory
 
+struct LogisticHyperparams {
+  var C: Float = 1
+  var maxIter: Int = 500
+}
+
 struct LogisticHessianScorer: FeatureScorer {
   let modelId = "logistic-l2"
   private var theta = [Float](repeating: 0, count: FeatureSchema.dim + 1)
   private var hess = [Float](repeating: 0, count: (FeatureSchema.dim + 1) * (FeatureSchema.dim + 1))
   var scaler = GuardedScaler()
   private(set) var hasModel = false
+  private var lastHyper = LogisticHyperparams()
 
   mutating func updateBatch(rows: [[Float]], labels: [Float], seed: Int) -> TrainingBatchMetrics {
+    updateBatch(rows: rows, labels: labels, seed: seed, hyper: LogisticHyperparams())
+  }
+
+  mutating func updateBatch(
+    rows: [[Float]], labels: [Float], seed: Int, hyper: LogisticHyperparams
+  ) -> TrainingBatchMetrics {
     _ = seed
-    let zRows = rows.map { scaler.transform($0) }
+    lastHyper = hyper
     let weights = balancedWeights(labels: labels)
     if !hasModel {
       scaler.fit(rows)
       let zFit = rows.map { scaler.transform($0) }
-      theta = fitLogisticLBFGS(zFit, labels: labels, weights: weights, maxIter: 500)
-      hess = logisticHessian(zFit, labels: labels, theta: theta, weights: weights, addL2Identity: true)
+      theta = fitLogisticLBFGS(
+        zFit, labels: labels, sampleWeights: weights, C: hyper.C, maxIter: hyper.maxIter, start: theta
+      )
+      hess = logisticHessian(
+        zFit, labels: labels, theta: theta, weights: weights, C: hyper.C, addL2Identity: true
+      )
       hasModel = true
     } else {
-      let zFit = zRows
-      let updated = updateLogisticQuadratic(zFit, labels: labels, theta: theta, hess: hess, weights: weights)
-      let curv = dataCurvature(zFit, labels: labels, theta: updated, weights: weights)
+      let zFit = rows.map { scaler.transform($0) }
+      let updated = updateLogisticQuadratic(
+        zFit, labels: labels, theta: theta, hess: hess, weights: weights, C: hyper.C, maxIter: hyper.maxIter
+      )
+      let curv = dataCurvature(zFit, labels: labels, theta: updated, weights: weights, C: hyper.C)
       hess = addMatrices(hess, curv)
       theta = updated
     }
-    let probs = zRows.map { logisticProba($0, theta: theta) }
+    let zEval = rows.map { scaler.transform($0) }
+    let probs = zEval.map { logisticProba($0, theta: theta) }
     return makeMetrics(labels: labels, probs: probs, innerLoss: 0, epoch: 1, accepted: true)
   }
 
@@ -98,35 +117,142 @@ private func logisticProba(_ x: [Float], theta: [Float]) -> Float {
   return sigmoid(z)
 }
 
-private func fitLogisticLBFGS(_ x: [[Float]], labels: [Float], weights: [Float], maxIter: Int) -> [Float] {
+private func stableLogLoss(z: Float, y: Float) -> Float {
+  if z >= 0 { return log1p(exp(-z)) - y * z }
+  return -y * z + log1p(exp(z))
+}
+
+private func logisticBatchObjectiveGrad(
+  _ x: [[Float]], labels: [Float], sampleWeights: [Float], theta: [Float], C: Float
+) -> (Float, [Float]) {
   let d = FeatureSchema.dim
-  var theta = [Float](repeating: 0, count: d + 1)
-  let lr: Float = 0.1
-  for _ in 0..<maxIter {
-    var grad = [Float](repeating: 0, count: d + 1)
-    for i in 0..<x.count {
-      let p = logisticProba(x[i], theta: theta)
-      let r = weights[i] * (p - labels[i])
-      for j in 0..<d { grad[j] += r * x[i][j] }
-      grad[d] += r
-    }
-    for j in 0..<d {
-      grad[j] += theta[j]
-      theta[j] -= lr * grad[j] / Float(x.count)
-    }
-    theta[d] -= lr * grad[d] / Float(x.count)
+  var grad = [Float](repeating: 0, count: d + 1)
+  var loss: Float = 0
+  for i in 0..<x.count {
+    var z = theta[d]
+    for j in 0..<d { z += x[i][j] * theta[j] }
+    loss += sampleWeights[i] * stableLogLoss(z: z, y: labels[i])
+    let p = sigmoid(z)
+    let r = sampleWeights[i] * (p - labels[i])
+    for j in 0..<d { grad[j] += r * x[i][j] }
+    grad[d] += r
   }
-  return theta
+  loss *= C
+  for j in 0..<d {
+    grad[j] = C * grad[j] + theta[j]
+  }
+  grad[d] *= C
+  var l2: Float = 0
+  for j in 0..<d { l2 += theta[j] * theta[j] }
+  loss += 0.5 * l2
+  return (loss, grad)
+}
+
+private func matVecSquare(_ m: [Float], _ v: [Float], n: Int) -> [Float] {
+  var out = [Float](repeating: 0, count: n)
+  for i in 0..<n {
+    var s: Float = 0
+    for k in 0..<n { s += m[i * n + k] * v[k] }
+    out[i] = s
+  }
+  return out
+}
+
+private func dot(_ a: [Float], _ b: [Float]) -> Float {
+  zip(a, b).reduce(Float(0)) { $0 + $1.0 * $1.1 }
+}
+
+private func lbfgsMinimize(
+  start: [Float],
+  maxIter: Int,
+  gradTol: Float,
+  valueAndGrad: ([Float]) -> (Float, [Float])
+) -> [Float] {
+  let n = start.count
+  var x = start
+  var (fx, g) = valueAndGrad(x)
+  var sHist = [[Float]]()
+  var yHist = [[Float]]()
+  var rhoHist = [Float]()
+  let mem = 10
+
+  for _ in 0..<maxIter {
+    if sqrt(dot(g, g)) < gradTol { break }
+    let k = sHist.count
+    var q = g
+    var alpha = [Float](repeating: 0, count: mem)
+    for i in stride(from: k - 1, through: 0, by: -1) {
+      let idx = i % mem
+      guard idx < rhoHist.count else { continue }
+      alpha[idx] = rhoHist[idx] * dot(sHist[idx], q)
+      for j in 0..<n { q[j] -= alpha[idx] * yHist[idx][j] }
+    }
+    var gamma: Float = 1
+    if k > 0 {
+      let last = (k - 1) % mem
+      let yy = dot(yHist[last], yHist[last])
+      if yy > 1e-12 { gamma = dot(sHist[last], yHist[last]) / yy }
+    }
+    var r = q.map { $0 * gamma }
+    for i in 0..<k {
+      let idx = i % mem
+      guard idx < rhoHist.count else { continue }
+      let beta = rhoHist[idx] * dot(yHist[idx], r)
+      for j in 0..<n { r[j] += sHist[idx][j] * (alpha[idx] - beta) }
+    }
+    let direction = r.map { -$0 }
+    var stepSize: Float = 1
+    var accepted = x
+    var acceptedG = g
+    var acceptedF = fx
+    for _ in 0..<25 {
+      let trial = zip(x, direction).map { $0 + stepSize * $1 }
+      let (fTrial, gTrial) = valueAndGrad(trial)
+      if fTrial <= fx - 1e-4 * stepSize * dot(g, direction) {
+        accepted = trial
+        acceptedG = gTrial
+        acceptedF = fTrial
+        break
+      }
+      stepSize *= 0.5
+    }
+    if stepSize < 1e-10 { break }
+    let s = zip(accepted, x).map { $0 - $1 }
+    let y = zip(acceptedG, g).map { $0 - $1 }
+    let sy = dot(s, y)
+    if sy > 1e-10 {
+      if sHist.count == mem {
+        sHist.removeFirst()
+        yHist.removeFirst()
+        rhoHist.removeFirst()
+      }
+      sHist.append(s)
+      yHist.append(y)
+      rhoHist.append(1 / sy)
+    }
+    x = accepted
+    g = acceptedG
+    fx = acceptedF
+  }
+  return x
+}
+
+private func fitLogisticLBFGS(
+  _ x: [[Float]], labels: [Float], sampleWeights: [Float], C: Float, maxIter: Int, start: [Float]
+) -> [Float] {
+  lbfgsMinimize(start: start, maxIter: maxIter, gradTol: 1e-6) { theta in
+    logisticBatchObjectiveGrad(x, labels: labels, sampleWeights: sampleWeights, theta: theta, C: C)
+  }
 }
 
 private func logisticHessian(
-  _ x: [[Float]], labels: [Float], theta: [Float], weights: [Float], addL2Identity: Bool
+  _ x: [[Float]], labels: [Float], theta: [Float], weights: [Float], C: Float, addL2Identity: Bool
 ) -> [Float] {
   let d = FeatureSchema.dim + 1
   var h = [Float](repeating: 0, count: d * d)
   for i in 0..<x.count {
     let p = logisticProba(x[i], theta: theta)
-    let c = weights[i] * p * (1 - p)
+    let c = C * weights[i] * p * (1 - p)
     var aug = x[i] + [1]
     for a in 0..<d {
       for b in 0..<d {
@@ -140,43 +266,46 @@ private func logisticHessian(
   return h
 }
 
-private func dataCurvature(_ x: [[Float]], labels: [Float], theta: [Float], weights: [Float]) -> [Float] {
-  logisticHessian(x, labels: labels, theta: theta, weights: weights, addL2Identity: false)
+private func dataCurvature(
+  _ x: [[Float]], labels: [Float], theta: [Float], weights: [Float], C: Float
+) -> [Float] {
+  logisticHessian(x, labels: labels, theta: theta, weights: weights, C: C, addL2Identity: false)
 }
 
 private func addMatrices(_ a: [Float], _ b: [Float]) -> [Float] {
   zip(a, b).map(+)
 }
 
+private func updateObjective(
+  theta: [Float], prev: [Float], x: [[Float]], labels: [Float], weights: [Float], C: Float, hess: [Float]
+) -> Float {
+  let (batchLoss, _) = logisticBatchObjectiveGrad(x, labels: labels, sampleWeights: weights, theta: theta, C: C)
+  let diff = zip(theta, prev).map(-)
+  let hd = matVecSquare(hess, diff, n: theta.count)
+  return batchLoss + 0.5 * dot(diff, hd)
+}
+
+private func updateObjectiveGrad(
+  theta: [Float], prev: [Float], x: [[Float]], labels: [Float], weights: [Float], C: Float, hess: [Float]
+) -> (Float, [Float]) {
+  let (loss, gBatch) = logisticBatchObjectiveGrad(x, labels: labels, sampleWeights: weights, theta: theta, C: C)
+  let diff = zip(theta, prev).map(-)
+  let hGrad = matVecSquare(hess, diff, n: theta.count)
+  var grad = gBatch
+  for j in 0..<grad.count { grad[j] += hGrad[j] }
+  return (loss + 0.5 * dot(diff, hGrad), grad)
+}
+
 private func updateLogisticQuadratic(
-  _ x: [[Float]], labels: [Float], theta prev: [Float], hess: [Float], weights: [Float]
+  _ x: [[Float]], labels: [Float], theta prev: [Float], hess: [Float], weights: [Float], C: Float, maxIter: Int
 ) -> [Float] {
-  let d = prev.count
-  var theta = prev
-  let lr: Float = 0.05
-  for _ in 0..<200 {
-    var grad = [Float](repeating: 0, count: d)
-    for i in 0..<x.count {
-      let p = logisticProba(x[i], theta: theta)
-      let r = weights[i] * (p - labels[i])
-      var aug = x[i] + [1]
-      for j in 0..<d { grad[j] += r * aug[j] }
-    }
-    let diff = zip(theta, prev).map(-)
-    for j in 0..<d {
-      var hGrad: Float = 0
-      for k in 0..<d { hGrad += hess[j * d + k] * diff[k] }
-      grad[j] += hGrad
-    }
-    var moved = false
-    for j in 0..<d {
-      let step = lr * grad[j] / Float(max(1, x.count))
-      if abs(step) > 1e-8 { moved = true }
-      theta[j] -= step
-    }
-    if !moved { break }
+  let startObj = updateObjective(theta: prev, prev: prev, x: x, labels: labels, weights: weights, C: C, hess: hess)
+  let result = lbfgsMinimize(start: prev, maxIter: min(maxIter, 200), gradTol: 1e-5) { theta in
+    updateObjectiveGrad(theta: theta, prev: prev, x: x, labels: labels, weights: weights, C: C, hess: hess)
   }
-  return theta
+  let endObj = updateObjective(theta: result, prev: prev, x: x, labels: labels, weights: weights, C: C, hess: hess)
+  if endObj > startObj + 1e-4 { return prev }
+  return result
 }
 
 // MARK: - Gaussian Naive Bayes

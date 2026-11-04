@@ -9,7 +9,14 @@ struct MLPHyperparams {
   var stepGamma: Float = 0.5
   var stepEvery: Int = 5
   var expDecay: Float = 0.95
-  var maxEpochs: Int = 40
+  var maxEpochs: Int = 80
+}
+
+struct CatBoostHyperparams {
+  var learningRate: Float = 0.1
+  var maxDepth: Int = 3
+  var minLeaf: Int = 8
+  var maxNewTrees: Int = 40
 }
 
 func scheduledLearningRate(_ hyper: MLPHyperparams, epoch: Int, maxEpoch: Int) -> Float {
@@ -314,22 +321,28 @@ struct BoostedTreeScorer: FeatureScorer {
   private var trees: [[BoostedTreeNode]] = []
   private var baseScore: Float = 0
   private(set) var hasModel = false
-  private let learningRate: Float = 0.1
-  private let maxDepth = 3
-  private let minLeaf = 8
-  private let maxNewTrees = 40
+  private var learningRate: Float = 0.1
+  private var trainHyper = CatBoostHyperparams()
 
   mutating func updateBatch(rows: [[Float]], labels: [Float], seed: Int) -> TrainingBatchMetrics {
+    updateBatch(rows: rows, labels: labels, seed: seed, hyper: CatBoostHyperparams())
+  }
+
+  mutating func updateBatch(
+    rows: [[Float]], labels: [Float], seed: Int, hyper: CatBoostHyperparams
+  ) -> TrainingBatchMetrics {
+    trainHyper = hyper
+    learningRate = hyper.learningRate
     let weights = balancedWeights(labels: labels)
-    var extra = maxNewTrees
+    var extra = hyper.maxNewTrees
     if stratifiedInnerSplit(labels: labels, seed: seed) != nil, hasModel {
-      extra = min(20, maxNewTrees)
+      extra = min(20, hyper.maxNewTrees)
     }
     if extra <= 0 && hasModel {
       let probs = rows.map { predict($0) }
       return makeMetrics(labels: labels, probs: probs, innerLoss: 0, epoch: 0, accepted: false)
     }
-    if extra <= 0 { extra = min(10, maxNewTrees) }
+    if extra <= 0 { extra = min(10, hyper.maxNewTrees) }
 
     var preds = rows.map { rawScore($0) }
     for _ in 0..<extra {
@@ -384,7 +397,7 @@ struct BoostedTreeScorer: FeatureScorer {
     func build(indices: [Int], d: Int) -> Int {
       let gSum = indices.reduce(Float(0)) { $0 + grad[$1] }
       let hSum = indices.reduce(Float(0)) { $0 + hess[$1] }
-      if d >= maxDepth || indices.count < minLeaf * 2 {
+      if d >= trainHyper.maxDepth || indices.count < trainHyper.minLeaf * 2 {
         return leaf(gSum, hSum)
       }
       var bestGain: Float = -1
@@ -398,7 +411,7 @@ struct BoostedTreeScorer: FeatureScorer {
           let thr = (vals[t] + vals[t + 1]) * 0.5
           let l = indices.filter { rows[$0][f] <= thr }
           let r = indices.filter { rows[$0][f] > thr }
-          if l.count < minLeaf || r.count < minLeaf { continue }
+          if l.count < trainHyper.minLeaf || r.count < trainHyper.minLeaf { continue }
           let gl = l.reduce(0) { $0 + grad[$1] }
           let hl = l.reduce(0) { $0 + hess[$1] }
           let gr = r.reduce(0) { $0 + grad[$1] }
@@ -835,21 +848,23 @@ final class FeatureModelBank {
     rows: [[Float]],
     labels: [Float],
     seed: Int,
-    hyper: MLPHyperparams,
+    mlpHyper: MLPHyperparams,
+    logisticHyper: LogisticHyperparams,
+    catboostHyper: CatBoostHyperparams,
     shouldStop: () -> Bool,
     onEpoch: (Int, Float, Float, Float, Float, Float) -> Void
   ) -> TrainingBatchMetrics {
     switch modelId {
     case "catboost":
-      return catboost.updateBatch(rows: rows, labels: labels, seed: seed)
+      return catboost.updateBatch(rows: rows, labels: labels, seed: seed, hyper: catboostHyper)
     case "mlp-small":
-      return mlpSmall.update(rows: rows, labels: labels, seed: seed, hyper: hyper, shouldStop: shouldStop, onEpoch: onEpoch)
+      return mlpSmall.update(rows: rows, labels: labels, seed: seed, hyper: mlpHyper, shouldStop: shouldStop, onEpoch: onEpoch)
     case "mlp-big":
-      return mlpBig.update(rows: rows, labels: labels, seed: seed, hyper: hyper, shouldStop: shouldStop, onEpoch: onEpoch)
+      return mlpBig.update(rows: rows, labels: labels, seed: seed, hyper: mlpHyper, shouldStop: shouldStop, onEpoch: onEpoch)
     case "gaussian-nb":
       return naiveBayes.updateBatch(rows: rows, labels: labels, seed: seed)
     default:
-      return logistic.updateBatch(rows: rows, labels: labels, seed: seed)
+      return logistic.updateBatch(rows: rows, labels: labels, seed: seed, hyper: logisticHyper)
     }
   }
 

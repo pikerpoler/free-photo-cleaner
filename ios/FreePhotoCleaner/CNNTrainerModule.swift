@@ -114,14 +114,24 @@ class CNNTrainerModule: RCTEventEmitter {
     let requested = (config["modelId"] as? String) ?? bank.activeModelId
     let modelId = FeatureSchema.scoreModelIds.contains(requested) ? requested : bank.activeModelId
     bank.setActive(modelId)
-    let hyper = MLPHyperparams(
+    let mlpHyper = MLPHyperparams(
       batchSize: (config["batchSize"] as? NSNumber)?.intValue ?? 8,
       learningRate: (config["learningRate"] as? NSNumber)?.floatValue ?? 0.001,
       scheduler: (config["scheduler"] as? String) ?? "constant",
       stepGamma: (config["stepGamma"] as? NSNumber)?.floatValue ?? 0.5,
       stepEvery: (config["stepEvery"] as? NSNumber)?.intValue ?? 5,
       expDecay: (config["expDecay"] as? NSNumber)?.floatValue ?? 0.95,
-      maxEpochs: 40
+      maxEpochs: (config["maxEpochs"] as? NSNumber)?.intValue ?? 80
+    )
+    let logisticHyper = LogisticHyperparams(
+      C: (config["logisticC"] as? NSNumber)?.floatValue ?? 1,
+      maxIter: (config["logisticMaxIter"] as? NSNumber)?.intValue ?? 500
+    )
+    let catboostHyper = CatBoostHyperparams(
+      learningRate: (config["catboostLearningRate"] as? NSNumber)?.floatValue ?? 0.1,
+      maxDepth: (config["catboostDepth"] as? NSNumber)?.intValue ?? 3,
+      minLeaf: (config["catboostMinLeaf"] as? NSNumber)?.intValue ?? 8,
+      maxNewTrees: (config["catboostMaxNewTrees"] as? NSNumber)?.intValue ?? 40
     )
 
     isTraining = true
@@ -181,7 +191,9 @@ class CNNTrainerModule: RCTEventEmitter {
         rows: rows,
         labels: y,
         seed: Int(Date().timeIntervalSince1970) % 10_000,
-        hyper: hyper,
+        mlpHyper: mlpHyper,
+        logisticHyper: logisticHyper,
+        catboostHyper: catboostHyper,
         shouldStop: { self.stopRequested },
         onEpoch: { epoch, trainLoss, valLoss, trainAcc, valAcc, lr in
           self.emit("trainingProgress", body: [

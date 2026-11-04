@@ -39,7 +39,7 @@ Legacy CNN checkpoints under `Documents/ai_models/` without `featureSchemaVersio
 
 ## Training UI
 
-Train AI: model picker. Logistic, CatBoost, and naive Bayes show accuracy and F1 for the last update. MLPs also show batch size, learning rate, scheduler, and a loss/accuracy graph.
+Train AI: model picker. Gaussian naive Bayes has no extra knobs. Logistic regression exposes **C** (default 1) and **max iterations** (default 500). CatBoost exposes **learning rate** (0.1), **depth** (3), **min photos per leaf** (8), and **new trees per train** (40). MLPs also show **train epochs** (default 80), batch size, learning rate (default 0.001), scheduler, and a loss/accuracy graph. Logistic, CatBoost, and naive Bayes show accuracy and F1 for the last update.
 
 A new model needs at least 20 labeled photos with both keeps and deletes. Later trains only add photos that model has not learned.
 

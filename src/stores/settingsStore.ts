@@ -54,6 +54,12 @@ interface SettingsState {
   aiStepGamma: number;
   aiStepSizeEpochs: number;
   aiExpDecay: number;
+  aiLogisticC: number;
+  aiLogisticMaxIter: number;
+  aiCatboostLearningRate: number;
+  aiCatboostDepth: number;
+  aiCatboostMinLeaf: number;
+  aiCatboostMaxNewTrees: number;
   aiAugmentations: AugmentationConfig;
 
   setPhotoSort: (sort: SortMode) => void;
@@ -72,6 +78,12 @@ interface SettingsState {
   setAIStepGamma: (v: number) => void;
   setAIStepSizeEpochs: (v: number) => void;
   setAIExpDecay: (v: number) => void;
+  setAILogisticC: (v: number) => void;
+  setAILogisticMaxIter: (v: number) => void;
+  setAICatboostLearningRate: (v: number) => void;
+  setAICatboostDepth: (v: number) => void;
+  setAICatboostMinLeaf: (v: number) => void;
+  setAICatboostMaxNewTrees: (v: number) => void;
   setAIAugmentations: (partial: Partial<AugmentationConfig>) => void;
   loadSettings: () => void;
 }
@@ -106,13 +118,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   aiModel: 'logistic-l2',
   aiSortModel: null,
   aiBatchSize: 8,
-  aiStepSize: 0.01,
-  aiEpochs: 20,
+  aiStepSize: 0.001,
+  aiEpochs: 80,
   aiTrainResize: DEFAULT_TRAIN_RESIZE,
   aiLrScheduler: 'constant',
   aiStepGamma: 0.5,
   aiStepSizeEpochs: 5,
   aiExpDecay: 0.95,
+  aiLogisticC: 1,
+  aiLogisticMaxIter: 500,
+  aiCatboostLearningRate: 0.1,
+  aiCatboostDepth: 3,
+  aiCatboostMinLeaf: 8,
+  aiCatboostMaxNewTrees: 40,
   aiAugmentations: DEFAULT_AUGMENTATIONS,
 
   setPhotoSort: (sort: SortMode) => {
@@ -201,6 +219,36 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     setSetting(KEYS.AI_EXP_DECAY, v);
   },
 
+  setAILogisticC: (v: number) => {
+    set({aiLogisticC: v});
+    setSetting(KEYS.AI_LOGISTIC_C, v);
+  },
+
+  setAILogisticMaxIter: (v: number) => {
+    set({aiLogisticMaxIter: v});
+    setSetting(KEYS.AI_LOGISTIC_MAX_ITER, v);
+  },
+
+  setAICatboostLearningRate: (v: number) => {
+    set({aiCatboostLearningRate: v});
+    setSetting(KEYS.AI_CATBOOST_LR, v);
+  },
+
+  setAICatboostDepth: (v: number) => {
+    set({aiCatboostDepth: v});
+    setSetting(KEYS.AI_CATBOOST_DEPTH, v);
+  },
+
+  setAICatboostMinLeaf: (v: number) => {
+    set({aiCatboostMinLeaf: v});
+    setSetting(KEYS.AI_CATBOOST_MIN_LEAF, v);
+  },
+
+  setAICatboostMaxNewTrees: (v: number) => {
+    set({aiCatboostMaxNewTrees: v});
+    setSetting(KEYS.AI_CATBOOST_MAX_NEW_TREES, v);
+  },
+
   setAIAugmentations: (partial: Partial<AugmentationConfig>) => {
     const updated = {...get().aiAugmentations, ...partial};
     if (updated.noiseStd > 0.05) updated.noiseStd = 0.05;
@@ -221,8 +269,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       aiModel: migrateModelId(rawModel),
       aiSortModel: rawSort ? migrateModelId(rawSort) : null,
       aiBatchSize: getSetting(KEYS.AI_BATCH_SIZE, 8),
-      aiStepSize: getSetting(KEYS.AI_STEP_SIZE, 0.01),
-      aiEpochs: getSetting(KEYS.AI_EPOCHS, 20),
+      aiStepSize: getSetting(KEYS.AI_STEP_SIZE, 0.001),
+      aiEpochs: getSetting(KEYS.AI_EPOCHS, 80),
       aiTrainResize: clampTrainResize(
         getSetting(KEYS.AI_TRAIN_RESIZE, DEFAULT_TRAIN_RESIZE),
       ),
@@ -230,6 +278,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       aiStepGamma: getSetting(KEYS.AI_STEP_GAMMA, 0.5),
       aiStepSizeEpochs: getSetting(KEYS.AI_STEP_SIZE_EPOCHS, 5),
       aiExpDecay: getSetting(KEYS.AI_EXP_DECAY, 0.95),
+      aiLogisticC: getSetting(KEYS.AI_LOGISTIC_C, 1),
+      aiLogisticMaxIter: getSetting(KEYS.AI_LOGISTIC_MAX_ITER, 500),
+      aiCatboostLearningRate: getSetting(KEYS.AI_CATBOOST_LR, 0.1),
+      aiCatboostDepth: getSetting(KEYS.AI_CATBOOST_DEPTH, 3),
+      aiCatboostMinLeaf: getSetting(KEYS.AI_CATBOOST_MIN_LEAF, 8),
+      aiCatboostMaxNewTrees: getSetting(KEYS.AI_CATBOOST_MAX_NEW_TREES, 40),
       aiAugmentations: {
         ...DEFAULT_AUGMENTATIONS,
         ...getSetting(KEYS.AI_AUGMENTATIONS, DEFAULT_AUGMENTATIONS),
