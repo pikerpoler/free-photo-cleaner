@@ -1,11 +1,10 @@
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useState} from 'react';
 import {
   ActivityIndicator,
   Alert,
   Platform,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TouchableOpacity,
   View,
@@ -19,18 +18,19 @@ import {
   getLabeledPhotoSamples,
 } from '../services/database';
 import {
+  deleteModel,
+  getModelStatus,
   isTrainerAvailable,
   startTraining,
   stopTraining,
   subscribeTrainingProgress,
 } from '../services/cnnTrainer';
 import {
-  DEFAULT_AUGMENTATIONS,
+  isMlpModel,
   LR_SCHEDULERS,
   LrSchedulerId,
   MIN_LABELED_FOR_TRAIN,
-  TRAIN_RESIZE_OPTIONS,
-  TRAIN_TEST_RATIO,
+  ModelStatus,
   TRAINABLE_MODELS,
   TrainableModelId,
   TrainingProgress,
@@ -117,62 +117,25 @@ function MetricChart({
   );
 }
 
-function AugToggle({
-  label,
-  value,
-  onChange,
-  disabled,
-  isDark,
-  children,
-}: {
-  label: string;
-  value: boolean;
-  onChange: (v: boolean) => void;
-  disabled?: boolean;
-  isDark: boolean;
-  children?: React.ReactNode;
-}) {
-  return (
-    <View style={styles.augBlock}>
-      <View style={styles.augRow}>
-        <Text style={[styles.label, isDark && styles.textDark]}>{label}</Text>
-        <Switch
-          value={value}
-          disabled={disabled}
-          onValueChange={onChange}
-          trackColor={{false: isDark ? '#39393D' : '#e9e9ea', true: '#34C759'}}
-        />
-      </View>
-      {value && children}
-    </View>
-  );
-}
-
 export function TrainAIScreen({onClose}: TrainAIScreenProps) {
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
 
   const {
     aiModel,
+    setAIModel,
     aiBatchSize,
     aiStepSize,
-    aiEpochs,
-    aiTrainResize,
     aiLrScheduler,
     aiStepGamma,
     aiStepSizeEpochs,
     aiExpDecay,
-    aiAugmentations,
-    setAIModel,
     setAIBatchSize,
     setAIStepSize,
-    setAIEpochs,
-    setAITrainResize,
     setAILrScheduler,
     setAIStepGamma,
     setAIStepSizeEpochs,
     setAIExpDecay,
-    setAIAugmentations,
   } = useSettingsStore();
 
   const {refreshModelStatus, activeModelInfo, hasModel} = useAIStore();
@@ -183,10 +146,10 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
   const [progress, setProgress] = useState<TrainingProgress | null>(null);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [statusText, setStatusText] = useState('');
+  const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
 
+  const mlp = isMlpModel(aiModel);
   const labeledTotal = counts.kept + counts.pendingDelete;
-  const trainSize = Math.max(1, Math.floor(labeledTotal * TRAIN_TEST_RATIO));
-  const testSize = Math.max(0, labeledTotal - trainSize);
   const canTrain =
     available &&
     !isTraining &&
@@ -194,18 +157,25 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
     counts.kept > 0 &&
     counts.pendingDelete > 0;
 
-  const augs = aiAugmentations ?? DEFAULT_AUGMENTATIONS;
+  const reloadStatus = useCallback(() => {
+    getModelStatus(aiModel).then(setModelStatus);
+  }, [aiModel]);
 
   useEffect(() => {
     setCounts(getLabeledCounts());
     refreshModelStatus();
     isTrainerAvailable().then(setAvailable);
-  }, [refreshModelStatus]);
+    reloadStatus();
+  }, [refreshModelStatus, reloadStatus]);
 
   useEffect(() => {
     return subscribeTrainingProgress(p => {
       setProgress(p);
-      setHistory(prev => {
+      if (p.phase === 'features' && p.index != null && p.total != null) {
+        setStatusText(`Extracting features ${p.index}/${p.total}…`);
+      }
+      if (p.phase === 'fit' && p.done === false) {
+        setHistory(prev => {
         const next = prev.filter(h => h.epoch !== p.epoch);
         next.push({
           epoch: p.epoch,
@@ -217,15 +187,9 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
         next.sort((a, b) => a.epoch - b.epoch);
         return next;
       });
+      }
     });
   }, []);
-
-  const heavyWarning = useMemo(() => {
-    if (aiTrainResize >= 256 || aiModel === 'cnn-small') {
-      return 'High resize and/or CNN Small may be slow on weaker devices.';
-    }
-    return null;
-  }, [aiTrainResize, aiModel]);
 
   const handleTrain = useCallback(async () => {
     if (!canTrain) return;
@@ -250,25 +214,25 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
         modelId: aiModel,
         batchSize: aiBatchSize,
         learningRate: aiStepSize,
-        epochs: aiEpochs,
-        trainResize: aiTrainResize,
-        trainRatio: TRAIN_TEST_RATIO,
-        lrScheduler: aiLrScheduler,
+        scheduler: aiLrScheduler,
         stepGamma: aiStepGamma,
-        stepSize: aiStepSizeEpochs,
+        stepEvery: aiStepSizeEpochs,
         expDecay: aiExpDecay,
-        augmentations: augs,
       });
+      const acc =
+        result.accuracy != null
+          ? `${(result.accuracy * 100).toFixed(0)}%`
+          : result.bestTestAcc != null
+            ? `${(result.bestTestAcc * 100).toFixed(0)}%`
+            : 'n/a';
+      const f1 = result.f1 != null ? result.f1.toFixed(2) : 'n/a';
       setStatusText(
         result.cancelled
-          ? `Stopped after ${result.epochsRan} epoch(s). Best test loss: ${
-              result.bestTestLoss?.toFixed?.(4) ?? 'n/a'
-            }`
-          : `Done. Best test loss: ${
-              result.bestTestLoss?.toFixed?.(4) ?? 'n/a'
-            } · acc ${result.bestTestAcc?.toFixed?.(3) ?? 'n/a'}`,
+          ? `Stopped. Accuracy ${acc} · F1 ${f1}`
+          : `Done. Accuracy ${acc} · F1 ${f1} on ${result.trainSize} new photos`,
       );
       await refreshModelStatus();
+      reloadStatus();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       Alert.alert('Training failed', msg);
@@ -281,15 +245,42 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
     aiModel,
     aiBatchSize,
     aiStepSize,
-    aiEpochs,
-    aiTrainResize,
     aiLrScheduler,
     aiStepGamma,
     aiStepSizeEpochs,
     aiExpDecay,
-    augs,
     refreshModelStatus,
+    reloadStatus,
   ]);
+
+  const explainTraining = useCallback(() => {
+    Alert.alert(
+      'Incremental training',
+      'Train adds only photos this model has not seen. The same labeled photos can train a different model, and their feature vectors stay cached. To fit this model again from scratch, delete it at the bottom of the screen.',
+    );
+  }, []);
+
+  const confirmDelete = useCallback(() => {
+    const label = TRAINABLE_MODELS.find(m => m.id === aiModel)?.label ?? aiModel;
+    Alert.alert(
+      `Delete ${label}?`,
+      'This clears its weights and which photos it has learned. The other models stay as they are.',
+      [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await deleteModel(aiModel);
+            setHistory([]);
+            setStatusText(`${label} deleted. The next train starts from scratch.`);
+            await refreshModelStatus();
+            reloadStatus();
+          },
+        },
+      ],
+    );
+  }, [aiModel, refreshModelStatus, reloadStatus]);
 
   return (
     <ScrollView
@@ -306,7 +297,7 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
 
       {!available && (
         <Text style={styles.warn}>
-          On-device CNN training is currently available on iOS only.
+          On-device feature training is available on iOS only.
         </Text>
       )}
 
@@ -316,10 +307,17 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
         Total: {labeledTotal}
       </Text>
       <Text style={[styles.body, isDark && styles.textSecondary]}>
-        Train / test (~80/20): {trainSize} / {testSize}
+        Train updates only the selected model. Photos it has already learned are skipped.
       </Text>
 
-      <Text style={[styles.section, isDark && styles.textDark]}>Model</Text>
+      <View style={styles.headerRow}>
+        <Text style={[styles.section, isDark && styles.textDark, styles.sectionInline]}>
+          Model
+        </Text>
+        <TouchableOpacity onPress={explainTraining} hitSlop={8}>
+          <Text style={styles.info}>ⓘ</Text>
+        </TouchableOpacity>
+      </View>
       <View style={styles.chipRow}>
         {TRAINABLE_MODELS.map(opt => (
           <TouchableOpacity
@@ -343,325 +341,106 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
         ))}
       </View>
 
-      <Text style={[styles.label, isDark && styles.textDark]}>
-        Training resize
-      </Text>
-      <View style={styles.chipRow}>
-        {TRAIN_RESIZE_OPTIONS.map(v => (
-          <TouchableOpacity
-            key={v}
-            style={[
-              styles.chip,
-              isDark && styles.chipDark,
-              aiTrainResize === v && styles.chipActive,
-            ]}
-            disabled={isTraining}
-            onPress={() => setAITrainResize(v)}>
-            <Text
-              style={[
-                styles.chipText,
-                isDark && styles.textDark,
-                aiTrainResize === v && styles.chipTextActive,
-              ]}>
-              {v}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-      {heavyWarning && <Text style={styles.warn}>{heavyWarning}</Text>}
-
-      <Text style={[styles.label, isDark && styles.textDark]}>
-        Batch size: {aiBatchSize}
-      </Text>
-      <Slider
-        style={styles.slider}
-        minimumValue={1}
-        maximumValue={32}
-        step={1}
-        value={aiBatchSize}
-        disabled={isTraining}
-        onSlidingComplete={v => setAIBatchSize(v)}
-        minimumTrackTintColor="#007AFF"
-      />
-
-      <Text style={[styles.label, isDark && styles.textDark]}>
-        Base learning rate: {aiStepSize.toFixed(3)}
-      </Text>
-      <Slider
-        style={styles.slider}
-        minimumValue={0.001}
-        maximumValue={0.1}
-        step={0.001}
-        value={aiStepSize}
-        disabled={isTraining}
-        onSlidingComplete={v => setAIStepSize(parseFloat(v.toFixed(3)))}
-        minimumTrackTintColor="#007AFF"
-      />
-
-      <Text style={[styles.label, isDark && styles.textDark]}>LR scheduler</Text>
-      <View style={styles.chipRow}>
-        {LR_SCHEDULERS.map(opt => (
-          <TouchableOpacity
-            key={opt.id}
-            style={[
-              styles.chip,
-              isDark && styles.chipDark,
-              aiLrScheduler === opt.id && styles.chipActive,
-            ]}
-            disabled={isTraining}
-            onPress={() => setAILrScheduler(opt.id as LrSchedulerId)}>
-            <Text
-              style={[
-                styles.chipText,
-                isDark && styles.textDark,
-                aiLrScheduler === opt.id && styles.chipTextActive,
-              ]}>
-              {opt.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-      {aiLrScheduler === 'step' && (
+      {mlp && (
         <>
           <Text style={[styles.label, isDark && styles.textDark]}>
-            Step gamma: {aiStepGamma.toFixed(2)}
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={0.1}
-            maximumValue={0.9}
-            step={0.05}
-            value={aiStepGamma}
-            disabled={isTraining}
-            onSlidingComplete={v => setAIStepGamma(parseFloat(v.toFixed(2)))}
-            minimumTrackTintColor="#007AFF"
-          />
-          <Text style={[styles.label, isDark && styles.textDark]}>
-            Step every N epochs: {aiStepSizeEpochs}
+            Batch size: {aiBatchSize}
           </Text>
           <Slider
             style={styles.slider}
             minimumValue={1}
-            maximumValue={20}
+            maximumValue={32}
             step={1}
-            value={aiStepSizeEpochs}
+            value={aiBatchSize}
             disabled={isTraining}
-            onSlidingComplete={v => setAIStepSizeEpochs(v)}
+            onSlidingComplete={v => setAIBatchSize(v)}
             minimumTrackTintColor="#007AFF"
           />
-        </>
-      )}
-      {aiLrScheduler === 'exponential' && (
-        <>
           <Text style={[styles.label, isDark && styles.textDark]}>
-            Decay: {aiExpDecay.toFixed(2)}
+            Learning rate: {aiStepSize.toFixed(4)}
           </Text>
           <Slider
             style={styles.slider}
-            minimumValue={0.8}
-            maximumValue={0.99}
-            step={0.01}
-            value={aiExpDecay}
+            minimumValue={0.0001}
+            maximumValue={0.05}
+            step={0.0001}
+            value={aiStepSize}
             disabled={isTraining}
-            onSlidingComplete={v => setAIExpDecay(parseFloat(v.toFixed(2)))}
+            onSlidingComplete={v => setAIStepSize(parseFloat(v.toFixed(4)))}
             minimumTrackTintColor="#007AFF"
           />
+          <Text style={[styles.label, isDark && styles.textDark]}>LR scheduler</Text>
+          <View style={styles.chipRow}>
+            {LR_SCHEDULERS.map(opt => (
+              <TouchableOpacity
+                key={opt.id}
+                style={[
+                  styles.chip,
+                  isDark && styles.chipDark,
+                  aiLrScheduler === opt.id && styles.chipActive,
+                ]}
+                disabled={isTraining}
+                onPress={() => setAILrScheduler(opt.id as LrSchedulerId)}>
+                <Text
+                  style={[
+                    styles.chipText,
+                    isDark && styles.textDark,
+                    aiLrScheduler === opt.id && styles.chipTextActive,
+                  ]}>
+                  {opt.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {aiLrScheduler === 'step' && (
+            <>
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                Step gamma: {aiStepGamma.toFixed(2)}
+              </Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={0.1}
+                maximumValue={0.9}
+                step={0.05}
+                value={aiStepGamma}
+                disabled={isTraining}
+                onSlidingComplete={v => setAIStepGamma(parseFloat(v.toFixed(2)))}
+                minimumTrackTintColor="#007AFF"
+              />
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                Step every N epochs: {aiStepSizeEpochs}
+              </Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={1}
+                maximumValue={20}
+                step={1}
+                value={aiStepSizeEpochs}
+                disabled={isTraining}
+                onSlidingComplete={v => setAIStepSizeEpochs(v)}
+                minimumTrackTintColor="#007AFF"
+              />
+            </>
+          )}
+          {aiLrScheduler === 'exponential' && (
+            <>
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                Decay: {aiExpDecay.toFixed(2)}
+              </Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={0.8}
+                maximumValue={0.99}
+                step={0.01}
+                value={aiExpDecay}
+                disabled={isTraining}
+                onSlidingComplete={v => setAIExpDecay(parseFloat(v.toFixed(2)))}
+                minimumTrackTintColor="#007AFF"
+              />
+            </>
+          )}
         </>
       )}
-
-      <Text style={[styles.label, isDark && styles.textDark]}>
-        Max epochs: {aiEpochs}
-      </Text>
-      <Slider
-        style={styles.slider}
-        minimumValue={1}
-        maximumValue={100}
-        step={1}
-        value={aiEpochs}
-        disabled={isTraining}
-        onSlidingComplete={v => setAIEpochs(v)}
-        minimumTrackTintColor="#007AFF"
-      />
-
-      <Text style={[styles.section, isDark && styles.textDark]}>
-        Augmentations
-      </Text>
-      <AugToggle
-        label="Normalize"
-        value={augs.normalize}
-        disabled={isTraining}
-        isDark={isDark}
-        onChange={v => setAIAugmentations({normalize: v})}>
-        <Text style={[styles.hint, isDark && styles.textSecondary]}>
-          Mean [{augs.normalizeMean.map(n => n.toFixed(2)).join(', ')}] · Std [
-          {augs.normalizeStd.map(n => n.toFixed(2)).join(', ')}]
-        </Text>
-      </AugToggle>
-      <AugToggle
-        label="Random crop"
-        value={augs.randomCrop}
-        disabled={isTraining}
-        isDark={isDark}
-        onChange={v => setAIAugmentations({randomCrop: v})}>
-        <Text style={[styles.label, isDark && styles.textDark]}>
-          Probability: {augs.cropProbability.toFixed(2)}
-        </Text>
-        <Slider
-          style={styles.slider}
-          minimumValue={0}
-          maximumValue={1}
-          step={0.05}
-          value={augs.cropProbability}
-          disabled={isTraining}
-          onSlidingComplete={v =>
-            setAIAugmentations({cropProbability: parseFloat(v.toFixed(2))})
-          }
-          minimumTrackTintColor="#007AFF"
-        />
-        <Text style={[styles.label, isDark && styles.textDark]}>
-          Crop fraction: {augs.cropFraction.toFixed(2)}
-        </Text>
-        <Slider
-          style={styles.slider}
-          minimumValue={0.5}
-          maximumValue={1}
-          step={0.05}
-          value={augs.cropFraction}
-          disabled={isTraining}
-          onSlidingComplete={v =>
-            setAIAugmentations({cropFraction: parseFloat(v.toFixed(2))})
-          }
-          minimumTrackTintColor="#007AFF"
-        />
-      </AugToggle>
-      <AugToggle
-        label="Random flip"
-        value={augs.randomFlip}
-        disabled={isTraining}
-        isDark={isDark}
-        onChange={v => setAIAugmentations({randomFlip: v})}>
-        <Text style={[styles.label, isDark && styles.textDark]}>
-          Probability: {augs.flipProbability.toFixed(2)}
-        </Text>
-        <Slider
-          style={styles.slider}
-          minimumValue={0}
-          maximumValue={1}
-          step={0.05}
-          value={augs.flipProbability}
-          disabled={isTraining}
-          onSlidingComplete={v =>
-            setAIAugmentations({flipProbability: parseFloat(v.toFixed(2))})
-          }
-          minimumTrackTintColor="#007AFF"
-        />
-      </AugToggle>
-      <AugToggle
-        label="Random rotation"
-        value={augs.randomRotation}
-        disabled={isTraining}
-        isDark={isDark}
-        onChange={v => setAIAugmentations({randomRotation: v})}>
-        <Text style={[styles.label, isDark && styles.textDark]}>
-          Probability: {augs.rotationProbability.toFixed(2)}
-        </Text>
-        <Slider
-          style={styles.slider}
-          minimumValue={0}
-          maximumValue={1}
-          step={0.05}
-          value={augs.rotationProbability}
-          disabled={isTraining}
-          onSlidingComplete={v =>
-            setAIAugmentations({
-              rotationProbability: parseFloat(v.toFixed(2)),
-            })
-          }
-          minimumTrackTintColor="#007AFF"
-        />
-        <Text style={[styles.label, isDark && styles.textDark]}>
-          Angle ±deg: {augs.rotationDegrees}
-        </Text>
-        <Slider
-          style={styles.slider}
-          minimumValue={5}
-          maximumValue={45}
-          step={1}
-          value={augs.rotationDegrees}
-          disabled={isTraining}
-          onSlidingComplete={v => setAIAugmentations({rotationDegrees: v})}
-          minimumTrackTintColor="#007AFF"
-        />
-      </AugToggle>
-      <AugToggle
-        label="Gaussian noise"
-        value={augs.gaussianNoise}
-        disabled={isTraining}
-        isDark={isDark}
-        onChange={v => setAIAugmentations({gaussianNoise: v})}>
-        <Text style={[styles.label, isDark && styles.textDark]}>
-          Std (max 0.05): {augs.noiseStd.toFixed(3)}
-        </Text>
-        <Slider
-          style={styles.slider}
-          minimumValue={0.005}
-          maximumValue={0.05}
-          step={0.005}
-          value={augs.noiseStd}
-          disabled={isTraining}
-          onSlidingComplete={v =>
-            setAIAugmentations({noiseStd: parseFloat(v.toFixed(3))})
-          }
-          minimumTrackTintColor="#007AFF"
-        />
-      </AugToggle>
-      <AugToggle
-        label="Color jitter"
-        value={augs.colorJitter}
-        disabled={isTraining}
-        isDark={isDark}
-        onChange={v => setAIAugmentations({colorJitter: v})}>
-        <Text style={[styles.label, isDark && styles.textDark]}>
-          Delta: {augs.jitterDelta.toFixed(2)}
-        </Text>
-        <Slider
-          style={styles.slider}
-          minimumValue={0.05}
-          maximumValue={0.3}
-          step={0.01}
-          value={augs.jitterDelta}
-          disabled={isTraining}
-          onSlidingComplete={v =>
-            setAIAugmentations({jitterDelta: parseFloat(v.toFixed(2))})
-          }
-          minimumTrackTintColor="#007AFF"
-        />
-      </AugToggle>
-      <AugToggle
-        label="Random grayscale"
-        value={augs.randomGrayscale}
-        disabled={isTraining}
-        isDark={isDark}
-        onChange={v => setAIAugmentations({randomGrayscale: v})}>
-        <Text style={[styles.label, isDark && styles.textDark]}>
-          Probability: {augs.grayscaleProbability.toFixed(2)}
-        </Text>
-        <Slider
-          style={styles.slider}
-          minimumValue={0}
-          maximumValue={1}
-          step={0.05}
-          value={augs.grayscaleProbability}
-          disabled={isTraining}
-          onSlidingComplete={v =>
-            setAIAugmentations({
-              grayscaleProbability: parseFloat(v.toFixed(2)),
-            })
-          }
-          minimumTrackTintColor="#007AFF"
-        />
-      </AugToggle>
-
       <View style={styles.actions}>
         {!isTraining ? (
           <TouchableOpacity
@@ -686,29 +465,71 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
         <View style={styles.statusRow}>
           <ActivityIndicator color="#007AFF" />
           <Text style={[styles.body, isDark && styles.textDark]}>
-            Epoch {progress?.epoch ?? 0}/{aiEpochs}
-            {progress
-              ? ` · lr ${progress.learningRate?.toFixed?.(4) ?? '?'} · loss ${progress.trainLoss.toFixed(3)}/${progress.testLoss.toFixed(3)} · acc ${(progress.trainAcc * 100).toFixed(0)}%/${(progress.testAcc * 100).toFixed(0)}%`
-              : ''}
+            {progress?.phase === 'features' && progress.index != null
+              ? `Extracting features ${progress.index}/${progress.total ?? '?'}`
+              : progress
+                ? `Fitting · loss ${Number(progress.trainLoss).toFixed(3)} · acc ${(Number(progress.trainAcc) * 100).toFixed(0)}%`
+                : 'Starting…'}
           </Text>
         </View>
       )}
 
-      <Text style={[styles.section, isDark && styles.textDark]}>Loss</Text>
-      <MetricChart
-        points={history}
-        isDark={isDark}
-        mode="loss"
-        emptyHint="Loss graph appears when training starts"
-      />
+      {mlp && (
+        <>
+          <Text style={[styles.section, isDark && styles.textDark]}>Loss</Text>
+          <MetricChart
+            points={history}
+            isDark={isDark}
+            mode="loss"
+            emptyHint="Loss graph appears while the MLP trains"
+          />
+          <Text style={[styles.section, isDark && styles.textDark]}>Accuracy</Text>
+          <MetricChart
+            points={history}
+            isDark={isDark}
+            mode="acc"
+            emptyHint="Accuracy graph appears while the MLP trains"
+          />
+        </>
+      )}
 
-      <Text style={[styles.section, isDark && styles.textDark]}>Accuracy</Text>
-      <MetricChart
-        points={history}
-        isDark={isDark}
-        mode="acc"
-        emptyHint="Accuracy graph appears when training starts"
-      />
+      <Text style={[styles.section, isDark && styles.textDark]}>Last update</Text>
+      {modelStatus?.hasModel ? (
+        <View style={[styles.table, isDark && styles.chartDark]}>
+          <View style={styles.tableRow}>
+            <Text style={[styles.tableCell, isDark && styles.textSecondary]}>Accuracy</Text>
+            <Text style={[styles.tableValue, isDark && styles.textDark]}>
+              {(modelStatus.accuracy * 100).toFixed(0)}%
+            </Text>
+          </View>
+          <View style={styles.tableRow}>
+            <Text style={[styles.tableCell, isDark && styles.textSecondary]}>F1</Text>
+            <Text style={[styles.tableValue, isDark && styles.textDark]}>
+              {modelStatus.f1.toFixed(2)}
+            </Text>
+          </View>
+          <View style={styles.tableRow}>
+            <Text style={[styles.tableCell, isDark && styles.textSecondary]}>
+              Photos in last update
+            </Text>
+            <Text style={[styles.tableValue, isDark && styles.textDark]}>
+              {modelStatus.trainSize}
+            </Text>
+          </View>
+          <View style={styles.tableRow}>
+            <Text style={[styles.tableCell, isDark && styles.textSecondary]}>
+              Photos learned
+            </Text>
+            <Text style={[styles.tableValue, isDark && styles.textDark]}>
+              {modelStatus.learnedCount}
+            </Text>
+          </View>
+        </View>
+      ) : (
+        <Text style={[styles.hint, isDark && styles.textSecondary]}>
+          Accuracy and F1 appear after this model trains.
+        </Text>
+      )}
 
       {!!statusText && (
         <Text style={[styles.body, isDark && styles.textSecondary]}>
@@ -721,13 +542,18 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
       </Text>
       <Text style={[styles.body, isDark && styles.textSecondary]}>
         {hasModel && activeModelInfo
-          ? `${activeModelInfo.modelId} @ ${activeModelInfo.trainResize}px · loss ${Number(
-              activeModelInfo.bestTestLoss,
-            ).toFixed(4)} · acc ${Number(
-              activeModelInfo.bestTestAcc ?? 0,
-            ).toFixed(3)}`
+          ? `${TRAINABLE_MODELS.find(m => m.id === activeModelInfo.modelId)?.label ?? activeModelInfo.modelId}`
           : 'No trained model yet.'}
       </Text>
+
+      <TouchableOpacity
+        style={[styles.deleteBtn, (!modelStatus?.hasModel || isTraining) && styles.btnDisabled]}
+        disabled={!modelStatus?.hasModel || isTraining}
+        onPress={confirmDelete}>
+        <Text style={styles.deleteBtnText}>
+          Delete {TRAINABLE_MODELS.find(m => m.id === aiModel)?.label ?? 'model'}
+        </Text>
+      </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -751,6 +577,8 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 8,
   },
+  sectionInline: {marginTop: 12, marginBottom: 0},
+  info: {fontSize: 18, color: '#007AFF', marginTop: 12},
   label: {fontSize: 14, color: '#333', marginTop: 12},
   body: {fontSize: 14, color: '#555', marginBottom: 4},
   textDark: {color: '#fff'},
@@ -789,6 +617,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   btnDisabled: {opacity: 0.4},
+  deleteBtn: {
+    marginTop: 28,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ff3b30',
+  },
+  deleteBtnText: {color: '#ff3b30', fontSize: 15, fontWeight: '600'},
+  table: {borderRadius: 8, backgroundColor: '#f5f5f7', paddingHorizontal: 12},
+  tableRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+  },
+  tableCell: {fontSize: 14, color: '#555'},
+  tableValue: {fontSize: 14, fontWeight: '600', color: '#111'},
   primaryBtnText: {color: '#fff', fontSize: 16, fontWeight: '700'},
   statusRow: {
     flexDirection: 'row',

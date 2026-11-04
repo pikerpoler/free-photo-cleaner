@@ -16,7 +16,11 @@
 		A1B2C3D81234567800FACADE /* StorageInfoModule.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D51234567800FACADE /* StorageInfoModule.m */; };
 		B2C3D4E81234567800TRAIN /* CNNTrainerModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E51234567800TRAIN /* CNNTrainerModule.swift */; };
 		B2C3D4E91234567800TRAIN /* CNNTrainerModule.m in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E61234567800TRAIN /* CNNTrainerModule.m */; };
-		B2C3D4EA1234567800TRAIN /* NeuralNetCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E71234567800TRAIN /* NeuralNetCore.swift */; };
+		C1D2E3F11234567800FEAT /* FeatureSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2A3B11234567800FEAT /* FeatureSchema.swift */; };
+		C1D2E3F21234567800FEAT /* PhotoFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2A3B21234567800FEAT /* PhotoFeatures.swift */; };
+		C1D2E3F31234567800FEAT /* YOLODetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2A3B31234567800FEAT /* YOLODetector.swift */; };
+		C1D2E3F41234567800FEAT /* ScoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2A3B41234567800FEAT /* ScoreModels.swift */; };
+		C1D2E3F51234567800FEAT /* ScoreModels+MLP.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2A3B51234567800FEAT /* ScoreModels+MLP.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,8 +38,12 @@
 		A1B2C3D61234567800FACADE /* FreePhotoCleaner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "FreePhotoCleaner-Bridging-Header.h"; path = "FreePhotoCleaner/FreePhotoCleaner-Bridging-Header.h"; sourceTree = "<group>"; };
 		B2C3D4E51234567800TRAIN /* CNNTrainerModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CNNTrainerModule.swift; path = FreePhotoCleaner/CNNTrainerModule.swift; sourceTree = "<group>"; };
 		B2C3D4E61234567800TRAIN /* CNNTrainerModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = CNNTrainerModule.m; path = FreePhotoCleaner/CNNTrainerModule.m; sourceTree = "<group>"; };
-		B2C3D4E71234567800TRAIN /* NeuralNetCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NeuralNetCore.swift; path = FreePhotoCleaner/NeuralNetCore.swift; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
+		F1E2A3B11234567800FEAT /* FeatureSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FeatureSchema.swift; path = FreePhotoCleaner/FeatureSchema.swift; sourceTree = "<group>"; };
+		F1E2A3B21234567800FEAT /* PhotoFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PhotoFeatures.swift; path = FreePhotoCleaner/PhotoFeatures.swift; sourceTree = "<group>"; };
+		F1E2A3B31234567800FEAT /* YOLODetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YOLODetector.swift; path = FreePhotoCleaner/YOLODetector.swift; sourceTree = "<group>"; };
+		F1E2A3B41234567800FEAT /* ScoreModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScoreModels.swift; path = FreePhotoCleaner/ScoreModels.swift; sourceTree = "<group>"; };
+		F1E2A3B51234567800FEAT /* ScoreModels+MLP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "ScoreModels+MLP.swift"; path = "FreePhotoCleaner/ScoreModels+MLP.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -59,7 +67,11 @@
 				A1B2C3D51234567800FACADE /* StorageInfoModule.m */,
 				B2C3D4E51234567800TRAIN /* CNNTrainerModule.swift */,
 				B2C3D4E61234567800TRAIN /* CNNTrainerModule.m */,
-				B2C3D4E71234567800TRAIN /* NeuralNetCore.swift */,
+				F1E2A3B11234567800FEAT /* FeatureSchema.swift */,
+				F1E2A3B21234567800FEAT /* PhotoFeatures.swift */,
+				F1E2A3B31234567800FEAT /* YOLODetector.swift */,
+				F1E2A3B41234567800FEAT /* ScoreModels.swift */,
+				F1E2A3B51234567800FEAT /* ScoreModels+MLP.swift */,
 				A1B2C3D61234567800FACADE /* FreePhotoCleaner-Bridging-Header.h */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
@@ -268,7 +280,11 @@
 				A1B2C3D81234567800FACADE /* StorageInfoModule.m in Sources */,
 				B2C3D4E81234567800TRAIN /* CNNTrainerModule.swift in Sources */,
 				B2C3D4E91234567800TRAIN /* CNNTrainerModule.m in Sources */,
-				B2C3D4EA1234567800TRAIN /* NeuralNetCore.swift in Sources */,
+				C1D2E3F11234567800FEAT /* FeatureSchema.swift in Sources */,
+				C1D2E3F21234567800FEAT /* PhotoFeatures.swift in Sources */,
+				C1D2E3F31234567800FEAT /* YOLODetector.swift in Sources */,
+				C1D2E3F41234567800FEAT /* ScoreModels.swift in Sources */,
+				C1D2E3F51234567800FEAT /* ScoreModels+MLP.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

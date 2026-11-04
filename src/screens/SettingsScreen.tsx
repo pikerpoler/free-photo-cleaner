@@ -464,7 +464,7 @@ export function SettingsScreen() {
         </Text>
         <Text style={[styles.filterLabel, isDark && styles.textSecondary]}>
           {hasModel && activeModelInfo
-            ? `Active: ${activeModelInfo.modelId} @ ${activeModelInfo.trainResize}px`
+            ? `Active: ${activeModelInfo.label ?? activeModelInfo.modelId} · accuracy ${((activeModelInfo.accuracy ?? activeModelInfo.bestTestAcc ?? 0) * 100).toFixed(0)}% · F1 ${(activeModelInfo.f1 ?? 0).toFixed(2)}`
             : 'No trained model yet'}
         </Text>
         <TouchableOpacity
@@ -512,10 +512,9 @@ export function SettingsScreen() {
                           styles.checkpointMeta,
                           isDark && styles.textSecondary,
                         ]}>
-                        loss {Number(cp.bestTestLoss).toFixed(4)} · acc{' '}
-                        {Number(cp.bestTestAcc ?? 0).toFixed(3)} · test n=
-                        {cp.testSize ?? '?'} ·{' '}
-                        {isNaN(date.getTime())
+                        accuracy {((cp.accuracy ?? cp.bestTestAcc ?? 0) * 100).toFixed(0)}% · F1{' '}
+                        {(cp.f1 ?? 0).toFixed(2)} · {cp.trainSize ?? 0} photos in last update ·{' '}
+                        {isNaN(date.getTime()) || date.getTime() === 0
                           ? '—'
                           : date.toLocaleDateString()}
                       </Text>

@@ -1,0 +1,6 @@
+YOLOX-Nano object detector weights (when bundled as YOLOXNano.mlpackage) are derived from
+the Megvii YOLOX project, licensed under the Apache License 2.0.
+
+See https://github.com/Megvii-BaseDetection/YOLOX
+
+Generate the Core ML package with: python scripts/export_yolox_nano.py

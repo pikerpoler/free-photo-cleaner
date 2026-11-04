@@ -19,6 +19,10 @@ RCT_EXTERN_METHOD(deleteModel:(NSString *)modelId
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(getModelStatus:(NSString *)modelId
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(resetActiveModel:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(stopTraining:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)

@@ -1,6 +1,7 @@
 import {NativeEventEmitter, NativeModules, Platform} from 'react-native';
 import {
   ModelCheckpointInfo,
+  ModelStatus,
   TrainingConfig,
   TrainingProgress,
   TrainingResult,
@@ -59,6 +60,17 @@ export async function loadModel(modelId: string): Promise<void> {
   await CNNTrainerModule.loadModel(modelId);
 }
 
+export async function getModelStatus(modelId: string): Promise<ModelStatus | null> {
+  if (!(await isTrainerAvailable())) return null;
+  try {
+    const status = await CNNTrainerModule.getModelStatus(modelId);
+    if (!status || typeof status !== 'object') return null;
+    return status as ModelStatus;
+  } catch {
+    return null;
+  }
+}
+
 export async function deleteModel(modelId: string): Promise<void> {
   if (!(await isTrainerAvailable())) return;
   await CNNTrainerModule.deleteModel(modelId);
@@ -82,7 +94,6 @@ export async function startTraining(
   }
   const result = await CNNTrainerModule.startTraining({
     ...config,
-    trainRatio: config.trainRatio ?? 0.8,
   });
   return result as TrainingResult;
 }

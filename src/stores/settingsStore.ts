@@ -18,16 +18,23 @@ import {getSetting, setSetting, KEYS} from '../services/storage';
 
 function migrateModelId(raw: string): TrainableModelId {
   const map: Record<string, TrainableModelId> = {
-    tiny: 'mlp-tiny',
+    tiny: 'mlp-small',
     small: 'mlp-small',
-    medium: 'mlp-medium',
-    'resnet-18': 'cnn-nano',
+    medium: 'mlp-big',
+    'mlp-tiny': 'mlp-small',
+    'mlp-medium': 'mlp-big',
+    'cnn-micro': 'logistic-l2',
+    'cnn-nano': 'logistic-l2',
+    'cnn-tiny': 'catboost',
+    'cnn-small': 'mlp-big',
+    'mobilenet-v3-head': 'catboost',
+    'resnet-18': 'logistic-l2',
   };
   if (map[raw]) return map[raw];
   const valid = TRAINABLE_MODELS.map(m => m.id);
   return valid.includes(raw as TrainableModelId)
     ? (raw as TrainableModelId)
-    : 'cnn-nano';
+    : 'logistic-l2';
 }
 
 interface SettingsState {
@@ -96,7 +103,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   videoFilters: DEFAULT_VIDEO_FILTERS,
   dateFilter: getDefaultDateFilter(),
   theme: 'system',
-  aiModel: 'cnn-nano',
+  aiModel: 'logistic-l2',
   aiSortModel: null,
   aiBatchSize: 8,
   aiStepSize: 0.01,
@@ -202,7 +209,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   loadSettings: () => {
-    const rawModel = getSetting(KEYS.AI_MODEL, 'cnn-nano' as string);
+    const rawModel = getSetting(KEYS.AI_MODEL, 'logistic-l2' as string);
     const rawSort = getSetting<string | null>(KEYS.AI_SORT_MODEL, null);
     set({
       photoSort: getSetting(KEYS.PHOTO_SORT, 'newest_first' as SortMode),

@@ -1,30 +1,27 @@
 export type TrainableModelId =
-  | 'mlp-tiny'
+  | 'logistic-l2'
+  | 'catboost'
   | 'mlp-small'
-  | 'mlp-medium'
-  | 'cnn-micro'
-  | 'cnn-nano'
-  | 'cnn-tiny'
-  | 'cnn-small'
-  | 'mobilenet-v3-head';
+  | 'mlp-big'
+  | 'gaussian-nb';
 
 export const TRAINABLE_MODELS: {id: TrainableModelId; label: string}[] = [
-  {id: 'mlp-tiny', label: 'MLP Tiny'},
-  {id: 'mlp-small', label: 'MLP Small'},
-  {id: 'mlp-medium', label: 'MLP Medium'},
-  {id: 'cnn-micro', label: 'CNN Micro'},
-  {id: 'cnn-nano', label: 'CNN Nano'},
-  {id: 'cnn-tiny', label: 'CNN Tiny'},
-  {id: 'cnn-small', label: 'CNN Small (heavy)'},
-  {id: 'mobilenet-v3-head', label: 'MobileNetV3 Head'},
+  {id: 'logistic-l2', label: 'Logistic Regression'},
+  {id: 'catboost', label: 'CatBoost'},
+  {id: 'gaussian-nb', label: 'Gaussian Naive Bayes'},
+  {id: 'mlp-small', label: 'small MLP'},
+  {id: 'mlp-big', label: 'big MLP'},
 ];
 
-export const TRAIN_RESIZE_OPTIONS = [32, 64, 128, 256, 512] as const;
-export type TrainResize = (typeof TRAIN_RESIZE_OPTIONS)[number];
-export const DEFAULT_TRAIN_RESIZE: TrainResize = 64;
+export const DEFAULT_TRAINABLE_MODEL: TrainableModelId = 'logistic-l2';
 export const MIN_LABELED_FOR_TRAIN = 20;
-export const TRAIN_TEST_RATIO = 0.8;
+export const FEATURE_DIM = 53;
 
+export function isMlpModel(id: string): boolean {
+  return id === 'mlp-small' || id === 'mlp-big';
+}
+
+/** Used by the MLP trainers. Other models ignore these. */
 export type LrSchedulerId = 'constant' | 'cosine' | 'step' | 'exponential';
 
 export const LR_SCHEDULERS: {id: LrSchedulerId; label: string}[] = [
@@ -74,20 +71,32 @@ export const DEFAULT_AUGMENTATIONS: AugmentationConfig = {
   grayscaleProbability: 0.1,
 };
 
+/** @deprecated CNN-era resize; feature models ignore this */
+export const TRAIN_RESIZE_OPTIONS = [64] as const;
+export type TrainResize = 64;
+export const DEFAULT_TRAIN_RESIZE: TrainResize = 64;
+export const TRAIN_TEST_RATIO = 1;
+
 export interface TrainingConfig {
   uris: string[];
   labels: number[];
   modelId: TrainableModelId;
-  batchSize: number;
-  learningRate: number;
-  epochs: number;
-  trainResize: number;
-  trainRatio?: number;
-  lrScheduler?: LrSchedulerId;
+  batchSize?: number;
+  learningRate?: number;
+  scheduler?: LrSchedulerId;
   stepGamma?: number;
-  stepSize?: number;
+  stepEvery?: number;
   expDecay?: number;
-  augmentations?: AugmentationConfig;
+}
+
+export interface ModelStatus {
+  modelId: string;
+  hasModel: boolean;
+  trainedAt: number;
+  accuracy: number;
+  f1: number;
+  trainSize: number;
+  learnedCount: number;
 }
 
 export interface TrainingProgress {
@@ -102,12 +111,17 @@ export interface TrainingProgress {
   testSize: number;
   learningRate: number;
   done: boolean;
+  phase?: 'features' | 'fit';
+  index?: number;
+  total?: number;
 }
 
 export interface TrainingResult {
   epochsRan: number;
   bestTestLoss: number | null;
   bestTestAcc: number | null;
+  accuracy?: number | null;
+  f1?: number | null;
   cancelled: boolean;
   trainSize: number;
   testSize: number;
@@ -117,17 +131,19 @@ export interface TrainingResult {
 
 export interface ModelCheckpointInfo {
   modelId: string;
-  trainResize: number;
-  bestTestLoss: number;
-  bestTestAcc: number;
-  testSize: number;
+  featureSchemaVersion?: number;
+  label?: string;
+  trainResize?: number;
+  bestTestLoss?: number;
+  bestTestAcc?: number;
+  accuracy?: number;
+  f1?: number;
+  testSize?: number;
   trainSize?: number;
+  learnedCount?: number;
   trainedAt: number;
   savedAt?: number;
 }
-
-/** @deprecated use ModelCheckpointInfo */
-export type ActiveModelInfo = ModelCheckpointInfo & {savedAt?: number};
 
 export interface LabeledSample {
   id: string;
@@ -136,15 +152,5 @@ export interface LabeledSample {
 }
 
 export function clampTrainResize(n: number): TrainResize {
-  const allowed = TRAIN_RESIZE_OPTIONS as readonly number[];
-  let best: TrainResize = DEFAULT_TRAIN_RESIZE;
-  let bestDist = Infinity;
-  for (const v of allowed) {
-    const d = Math.abs(v - n);
-    if (d < bestDist) {
-      bestDist = d;
-      best = v as TrainResize;
-    }
-  }
-  return best;
+  return 64;
 }
