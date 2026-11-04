@@ -38,6 +38,7 @@ export function PhotosScreen() {
     flushDeletes,
     photoUndoStack,
     photoPendingCount,
+    photoEligibleCount,
   } = useQueueStore();
 
   const {photoSort, photoFilters, dateFilter} = useSettingsStore();
@@ -69,7 +70,7 @@ export function PhotosScreen() {
 
   const currentAsset = photoQueue[photoIndex];
   const nextAsset = photoQueue[photoIndex + 1] || null;
-  const remaining = photoQueue.length - photoIndex;
+  const remaining = photoEligibleCount;
   const canUndo = photoUndoStack.length > 0;
   const showScores = photoSort === 'ai';
   const currentId = currentAsset?.id;

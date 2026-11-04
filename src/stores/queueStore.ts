@@ -42,6 +42,8 @@ interface QueueState {
   isLoadingVideosMore: boolean;
   photoPendingCount: number;
   videoPendingCount: number;
+  /** Photos still in the library that pass the current filters. */
+  photoEligibleCount: number;
   photoUndoStack: UndoEntry[];
   videoUndoStack: UndoEntry[];
 
@@ -75,11 +77,11 @@ let currentVideoFilters: VideoFilters | undefined;
 let currentDateFilter: DateFilter | undefined;
 
 /** Max scored photos ahead of (and including) the current card for AI sort. */
-const AI_QUEUE_CAP = 100;
+const AI_QUEUE_CAP = 300;
 /** Unscored candidates scored per refill pass. */
 const AI_SCORE_BATCH = 32;
-/** Kick another refill when remaining scored cards drop below this. */
-const AI_REFILL_THRESHOLD = 50;
+/** Kick another refill when the scored window drops below this. */
+const AI_REFILL_THRESHOLD = 250;
 
 let aiFillInFlight = false;
 
@@ -160,6 +162,16 @@ function filterEligible(
   }
 
   return assets;
+}
+
+function countPhotoEligible(): number {
+  return filterEligible(
+    photoRawCache,
+    'photo',
+    currentPhotoFilters,
+    undefined,
+    currentDateFilter,
+  ).length;
 }
 
 function buildScoredRemainder(
@@ -254,6 +266,7 @@ async function ensureAIQueueFilled(
       set({
         photoQueue: built.queue,
         photoIndex: built.index,
+        photoEligibleCount: built.eligibleCount,
         isLoadingPhotos:
           built.queue.length === 0 &&
           (stillNeedScores || photoRawCache.length === 0),
@@ -389,6 +402,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   isLoadingVideosMore: false,
   photoPendingCount: getPendingDeletesByType('photo').length,
   videoPendingCount: getPendingDeletesByType('video').length,
+  photoEligibleCount: 0,
   photoUndoStack: [],
   videoUndoStack: [],
 
@@ -434,6 +448,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         set({
           photoQueue: [],
           photoIndex: 0,
+          photoEligibleCount: countPhotoEligible(),
           isLoadingPhotos: true,
           isLoadingPhotosMore: true,
         });
@@ -452,6 +467,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           [indexKey]: 0,
           [loadingKey]: false,
           [loadingMoreKey]: true,
+          ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
         });
       }
     } else {
@@ -460,6 +476,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         [indexKey]: 0,
         [loadingKey]: true,
         [loadingMoreKey]: false,
+        ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
       });
     }
 
@@ -493,9 +510,15 @@ export const useQueueStore = create<QueueState>((set, get) => ({
               pruneCatalogToIds(type, seenIds);
               photoRawCache = getCatalogAssets(type);
             }
-            set({isLoadingPhotosMore: false});
+            set({
+              isLoadingPhotosMore: false,
+              photoEligibleCount: countPhotoEligible(),
+            });
           } else {
-            set({isLoadingPhotosMore: true});
+            set({
+              isLoadingPhotosMore: true,
+              photoEligibleCount: countPhotoEligible(),
+            });
           }
           void ensureAIQueueFilled(set, get);
           return;
@@ -516,6 +539,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             [indexKey]: 0,
             [loadingKey]: false,
             [loadingMoreKey]: !done,
+            ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
           });
         } else if (done) {
           // Full library sync without date filter on CameraRoll when catalog warm
@@ -548,6 +572,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             [queueKey]: [...frozenPrefix, ...remainder],
             [loadingMoreKey]: false,
             [loadingKey]: false,
+            ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
           });
         } else {
           // Intermediate: update remaining without resetting index
@@ -571,6 +596,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             [queueKey]: [...frozenPrefix, ...remainder],
             [loadingMoreKey]: true,
             [loadingKey]: false,
+            ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
           });
         }
       },
@@ -603,6 +629,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       set({
         photoQueue: [],
         photoIndex: 0,
+        photoEligibleCount: countPhotoEligible(),
         isLoadingPhotos: true,
       });
       void ensureAIQueueFilled(set, get);
@@ -620,7 +647,12 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       currentDateFilter,
     );
 
-    set({[queueKey]: queue, [indexKey]: 0, isLoadingPhotos: false});
+    set({
+      [queueKey]: queue,
+      [indexKey]: 0,
+      isLoadingPhotos: false,
+      ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
+    });
   },
 
   swipeLeft: (type: MediaType) => {
@@ -652,6 +684,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       [indexKey]: index + 1,
       [countKey]: currentCount + 1,
       [stackKey]: [...currentStack, {type: 'delete', asset, queue: type}],
+      ...(type === 'photo' ? {photoEligibleCount: countPhotoEligible()} : {}),
     });
 
     if (type === 'photo') {
@@ -677,6 +710,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     set({
       [indexKey]: index + 1,
       [stackKey]: [...currentStack, {type: 'keep', asset, queue: type}],
+      ...(type === 'photo' ? {photoEligibleCount: countPhotoEligible()} : {}),
     });
 
     if (type === 'photo') {
@@ -731,23 +765,26 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const newStack = stack.slice(0, -1);
 
     const indexKey = type === 'photo' ? 'photoIndex' : 'videoIndex';
-    const currentIndex = get()[indexKey] as number;
-
-    if (currentIndex > 0) {
-      set({[indexKey]: currentIndex - 1});
-    }
+    const currentIndex = state[indexKey];
 
     if (lastEntry.type === 'keep') {
       removeAssetFromKept(lastEntry.asset.id);
     } else {
       removePendingDelete(lastEntry.asset.id);
-      const countKey =
-        type === 'photo' ? 'photoPendingCount' : 'videoPendingCount';
-      const currentCount = get()[countKey] as number;
-      set({[countKey]: Math.max(0, currentCount - 1)});
     }
 
-    set({[stackKey]: newStack});
+    const countKey =
+      type === 'photo' ? 'photoPendingCount' : 'videoPendingCount';
+    const currentCount = state[countKey];
+
+    set({
+      ...(currentIndex > 0 ? {[indexKey]: currentIndex - 1} : {}),
+      [stackKey]: newStack,
+      ...(lastEntry.type === 'delete'
+        ? {[countKey]: Math.max(0, currentCount - 1)}
+        : {}),
+      ...(type === 'photo' ? {photoEligibleCount: countPhotoEligible()} : {}),
+    });
   },
 
   getCurrentAsset: (type: MediaType) => {
@@ -769,7 +806,12 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (photoRawCache.length === 0) return;
 
     if (currentPhotoSort === 'ai') {
-      set({photoQueue: [], photoIndex: 0, isLoadingPhotos: true});
+      set({
+        photoQueue: [],
+        photoIndex: 0,
+        photoEligibleCount: countPhotoEligible(),
+        isLoadingPhotos: true,
+      });
       await ensureAIQueueFilled(set, get);
       return;
     }
@@ -782,6 +824,10 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       undefined,
       currentDateFilter,
     );
-    set({photoQueue: queue, photoIndex: 0});
+    set({
+      photoQueue: queue,
+      photoIndex: 0,
+      photoEligibleCount: countPhotoEligible(),
+    });
   },
 }));
