@@ -187,6 +187,33 @@ function buildScoredRemainder(
   return scored.slice(0, Math.max(0, cap));
 }
 
+/** Step the cursor back onto an undone card, reinserting it if a refill removed it. */
+function restoreUndoneAsset(
+  queue: MediaAsset[],
+  index: number,
+  asset: MediaAsset,
+): {queue: MediaAsset[]; index: number} {
+  if (index > 0 && queue[index - 1]?.id === asset.id) {
+    return {queue, index: index - 1};
+  }
+  if (queue[index]?.id === asset.id) {
+    return {queue, index};
+  }
+
+  const removedBefore = queue
+    .slice(0, index)
+    .reduce((count, item) => count + (item.id === asset.id ? 1 : 0), 0);
+  const without = queue.filter(item => item.id !== asset.id);
+  const insertAt = Math.max(
+    0,
+    Math.min(index - removedBefore, without.length),
+  );
+  return {
+    queue: [...without.slice(0, insertAt), asset, ...without.slice(insertAt)],
+    index: insertAt,
+  };
+}
+
 function rebuildAIQueueFromScores(get: () => QueueState): {
   queue: MediaAsset[];
   index: number;
@@ -213,9 +240,14 @@ function rebuildAIQueueFromScores(get: () => QueueState): {
   const frozenIds = new Set(past.map(a => a.id));
   if (current) frozenIds.add(current.id);
 
-  // Drop past/current if they are no longer eligible (kept/pending/filtered out).
+  // Drop past/current cards that are no longer eligible, but keep anything
+  // still on the undo stack. Those cards sit just behind the cursor, and
+  // removing them makes undo pop the button without bringing the photo back.
   const eligibleIds = new Set(eligible.map(a => a.id));
-  const pastKept = past.filter(a => eligibleIds.has(a.id));
+  const undoIds = new Set(state.photoUndoStack.map(entry => entry.asset.id));
+  const pastKept = past.filter(
+    a => eligibleIds.has(a.id) || undoIds.has(a.id),
+  );
   const currentKept =
     current && eligibleIds.has(current.id) ? current : undefined;
 
@@ -755,17 +787,14 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   undo: (type: MediaType) => {
     const state = get();
-    const stackKey = type === 'photo' ? 'photoUndoStack' : 'videoUndoStack';
-    const stack =
-      type === 'photo' ? state.photoUndoStack : state.videoUndoStack;
+    const isPhoto = type === 'photo';
+    const stackKey = isPhoto ? 'photoUndoStack' : 'videoUndoStack';
+    const stack = isPhoto ? state.photoUndoStack : state.videoUndoStack;
 
     if (stack.length === 0) return;
 
     const lastEntry = stack[stack.length - 1];
     const newStack = stack.slice(0, -1);
-
-    const indexKey = type === 'photo' ? 'photoIndex' : 'videoIndex';
-    const currentIndex = state[indexKey];
 
     if (lastEntry.type === 'keep') {
       removeAssetFromKept(lastEntry.asset.id);
@@ -773,17 +802,21 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       removePendingDelete(lastEntry.asset.id);
     }
 
-    const countKey =
-      type === 'photo' ? 'photoPendingCount' : 'videoPendingCount';
+    const queue = isPhoto ? state.photoQueue : state.videoQueue;
+    const index = isPhoto ? state.photoIndex : state.videoIndex;
+    const restored = restoreUndoneAsset(queue, index, lastEntry.asset);
+
+    const countKey = isPhoto ? 'photoPendingCount' : 'videoPendingCount';
     const currentCount = state[countKey];
 
     set({
-      ...(currentIndex > 0 ? {[indexKey]: currentIndex - 1} : {}),
+      [isPhoto ? 'photoQueue' : 'videoQueue']: restored.queue,
+      [isPhoto ? 'photoIndex' : 'videoIndex']: restored.index,
       [stackKey]: newStack,
       ...(lastEntry.type === 'delete'
         ? {[countKey]: Math.max(0, currentCount - 1)}
         : {}),
-      ...(type === 'photo' ? {photoEligibleCount: countPhotoEligible()} : {}),
+      ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
     });
   },
 
