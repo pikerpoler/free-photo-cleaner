@@ -49,10 +49,14 @@ struct MLPScorer: FeatureScorer {
     self.hidden = hidden
   }
 
-  mutating func updateBatch(rows: [[Float]], labels: [Float], seed: Int) -> TrainingBatchMetrics {
+  mutating func updateBatch(
+    rows: [[Float]], labels: [Float], trainIdx: [Int], testIdx: [Int], seed: Int
+  ) -> TrainingBatchMetrics {
     update(
       rows: rows,
       labels: labels,
+      trainIdx: trainIdx,
+      testIdx: testIdx,
       seed: seed,
       hyper: MLPHyperparams(),
       shouldStop: { false },
@@ -63,25 +67,17 @@ struct MLPScorer: FeatureScorer {
   mutating func update(
     rows: [[Float]],
     labels: [Float],
+    trainIdx: [Int],
+    testIdx: [Int],
     seed: Int,
     hyper: MLPHyperparams,
     shouldStop: () -> Bool,
     onEpoch: (Int, Float, Float, Float, Float, Float) -> Void
   ) -> TrainingBatchMetrics {
     if !hasModel {
-      scaler.fit(rows)
+      scaler.fit(trainIdx.map { rows[$0] })
       initWeights(seed: seed)
       hasModel = true
-    }
-    let split = stratifiedInnerSplit(labels: labels, seed: seed)
-    let trainIdx: [Int]
-    let valIdx: [Int]
-    if let s = split {
-      trainIdx = s.0
-      valIdx = s.1
-    } else {
-      trainIdx = Array(0..<rows.count)
-      valIdx = []
     }
     let zAll = rows.map { scaler.transform($0) }
     var bestLoss = Float.infinity
@@ -102,19 +98,19 @@ struct MLPScorer: FeatureScorer {
         shouldStop: shouldStop
       )
       let trainLoss = batchLogLoss(indices: trainIdx, zRows: zAll, labels: labels)
-      let vLoss = valIdx.isEmpty ? trainLoss : batchLogLoss(indices: valIdx, zRows: zAll, labels: labels)
+      let testLoss = testIdx.isEmpty ? trainLoss : batchLogLoss(indices: testIdx, zRows: zAll, labels: labels)
       let trainProbs = trainIdx.map { forward(zAll[$0]) }
       let trainLabs = trainIdx.map { labels[$0] }
       let trainAcc = accuracy(labels: trainLabs, probs: trainProbs)
-      let valAcc: Float
-      if valIdx.isEmpty {
-        valAcc = trainAcc
+      let testAcc: Float
+      if testIdx.isEmpty {
+        testAcc = trainAcc
       } else {
-        valAcc = accuracy(labels: valIdx.map { labels[$0] }, probs: valIdx.map { forward(zAll[$0]) })
+        testAcc = accuracy(labels: testIdx.map { labels[$0] }, probs: testIdx.map { forward(zAll[$0]) })
       }
-      onEpoch(epoch, trainLoss, vLoss, trainAcc, valAcc, lr)
-      if vLoss < bestLoss - 1e-6 {
-        bestLoss = vLoss
+      onEpoch(epoch, trainLoss, testLoss, trainAcc, testAcc, lr)
+      if testLoss < bestLoss - 1e-6 {
+        bestLoss = testLoss
         bestEpoch = epoch
         bestWeights = weights
         bestBiases = biases
@@ -126,8 +122,9 @@ struct MLPScorer: FeatureScorer {
     }
     weights = bestWeights
     biases = bestBiases
-    let probs = zAll.map { forward($0) }
-    return makeMetrics(labels: labels, probs: probs, innerLoss: bestLoss, epoch: bestEpoch, accepted: bestEpoch > 0)
+    let testProbs = testIdx.map { forward(zAll[$0]) }
+    let testLabs = testIdx.map { labels[$0] }
+    return makeMetrics(labels: testLabs, probs: testProbs, epoch: bestEpoch, accepted: bestEpoch > 0)
   }
 
   func predict(_ row: [Float]) -> Float {
@@ -324,44 +321,48 @@ struct BoostedTreeScorer: FeatureScorer {
   private var learningRate: Float = 0.1
   private var trainHyper = CatBoostHyperparams()
 
-  mutating func updateBatch(rows: [[Float]], labels: [Float], seed: Int) -> TrainingBatchMetrics {
-    updateBatch(rows: rows, labels: labels, seed: seed, hyper: CatBoostHyperparams())
+  mutating func updateBatch(
+    rows: [[Float]], labels: [Float], trainIdx: [Int], testIdx: [Int], seed: Int
+  ) -> TrainingBatchMetrics {
+    updateBatch(
+      rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed, hyper: CatBoostHyperparams()
+    )
   }
 
   mutating func updateBatch(
-    rows: [[Float]], labels: [Float], seed: Int, hyper: CatBoostHyperparams
+    rows: [[Float]], labels: [Float], trainIdx: [Int], testIdx: [Int], seed: Int, hyper: CatBoostHyperparams
   ) -> TrainingBatchMetrics {
     trainHyper = hyper
     learningRate = hyper.learningRate
-    let weights = balancedWeights(labels: labels)
+    let trainRows = trainIdx.map { rows[$0] }
+    let trainLabels = trainIdx.map { labels[$0] }
+    let testLabels = testIdx.map { labels[$0] }
     var extra = hyper.maxNewTrees
-    if stratifiedInnerSplit(labels: labels, seed: seed) != nil, hasModel {
-      extra = min(20, hyper.maxNewTrees)
-    }
     if extra <= 0 && hasModel {
-      let probs = rows.map { predict($0) }
-      return makeMetrics(labels: labels, probs: probs, innerLoss: 0, epoch: 0, accepted: false)
+      let probs = testIdx.map { predict(rows[$0]) }
+      return makeMetrics(labels: testLabels, probs: probs, epoch: 0, accepted: false)
     }
     if extra <= 0 { extra = min(10, hyper.maxNewTrees) }
 
-    var preds = rows.map { rawScore($0) }
+    let weights = balancedWeights(labels: trainLabels)
+    var preds = trainRows.map { rawScore($0) }
     for _ in 0..<extra {
       var grad = [Float]()
       var hess = [Float]()
-      for i in 0..<rows.count {
+      for i in 0..<trainRows.count {
         let p = sigmoid(preds[i])
-        grad.append(weights[i] * (p - labels[i]))
+        grad.append(weights[i] * (p - trainLabels[i]))
         hess.append(max(weights[i] * p * (1 - p), 1e-6))
       }
-      let tree = buildTree(rows: rows, grad: grad, hess: hess, depth: 0, seed: seed)
+      let tree = buildTree(rows: trainRows, grad: grad, hess: hess, depth: 0, seed: seed)
       trees.append(tree)
-      for i in 0..<rows.count {
-        preds[i] += learningRate * evalTree(tree, rows[i])
+      for i in 0..<trainRows.count {
+        preds[i] += learningRate * evalTree(tree, trainRows[i])
       }
     }
     hasModel = !trees.isEmpty
-    let probs = preds.map(sigmoid)
-    return makeMetrics(labels: labels, probs: probs, innerLoss: 0, epoch: extra, accepted: extra > 0)
+    let probs = testIdx.map { predict(rows[$0]) }
+    return makeMetrics(labels: testLabels, probs: probs, epoch: extra, accepted: extra > 0)
   }
 
   private func rawScore(_ row: [Float]) -> Float {
@@ -634,6 +635,7 @@ struct ModelScoreRecord {
   var accuracy: Float = 0
   var f1: Float = 0
   var trainSize: Int = 0
+  var testSize: Int = 0
 }
 
 final class FeatureModelBank {
@@ -745,13 +747,16 @@ final class FeatureModelBank {
     }
   }
 
-  func saveSelected(modelId: String, newIds: [String], metrics: TrainingBatchMetrics, trainSize: Int) throws {
+  func saveSelected(
+    modelId: String, newIds: [String], metrics: TrainingBatchMetrics, trainSize: Int, testSize: Int
+  ) throws {
     trainedIndex.mark(newIds, modelId: modelId)
     let record = ModelScoreRecord(
       trainedAtMs: Date().timeIntervalSince1970 * 1000,
-      accuracy: metrics.trainAcc,
+      accuracy: metrics.testAcc,
       f1: metrics.f1,
-      trainSize: trainSize
+      trainSize: trainSize,
+      testSize: testSize
     )
     records[modelId] = record
     let dir = modelDir(modelId)
@@ -761,6 +766,7 @@ final class FeatureModelBank {
       "accuracy": Double(record.accuracy),
       "f1": Double(record.f1),
       "trainSize": trainSize,
+      "testSize": testSize,
     ]
     try JSONSerialization.data(withJSONObject: meta).write(to: dir.appendingPathComponent("metrics.json"))
     switch modelId {
@@ -808,7 +814,8 @@ final class FeatureModelBank {
       trainedAtMs: (json["trainedAt"] as? NSNumber)?.doubleValue ?? 0,
       accuracy: (json["accuracy"] as? NSNumber)?.floatValue ?? 0,
       f1: (json["f1"] as? NSNumber)?.floatValue ?? 0,
-      trainSize: (json["trainSize"] as? NSNumber)?.intValue ?? 0
+      trainSize: (json["trainSize"] as? NSNumber)?.intValue ?? 0,
+      testSize: (json["testSize"] as? NSNumber)?.intValue ?? 0
     )
   }
 
@@ -821,6 +828,7 @@ final class FeatureModelBank {
       "accuracy": Double(rec?.accuracy ?? 0),
       "f1": Double(rec?.f1 ?? 0),
       "trainSize": rec?.trainSize ?? 0,
+      "testSize": rec?.testSize ?? 0,
       "learnedCount": trainedIndex.count(modelId: modelId),
     ]
   }
@@ -848,6 +856,8 @@ final class FeatureModelBank {
     modelId: String,
     rows: [[Float]],
     labels: [Float],
+    trainIdx: [Int],
+    testIdx: [Int],
     seed: Int,
     mlpHyper: MLPHyperparams,
     logisticHyper: LogisticHyperparams,
@@ -857,15 +867,25 @@ final class FeatureModelBank {
   ) -> TrainingBatchMetrics {
     switch modelId {
     case "catboost":
-      return catboost.updateBatch(rows: rows, labels: labels, seed: seed, hyper: catboostHyper)
+      return catboost.updateBatch(
+        rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed, hyper: catboostHyper
+      )
     case "mlp-small":
-      return mlpSmall.update(rows: rows, labels: labels, seed: seed, hyper: mlpHyper, shouldStop: shouldStop, onEpoch: onEpoch)
+      return mlpSmall.update(
+        rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed,
+        hyper: mlpHyper, shouldStop: shouldStop, onEpoch: onEpoch
+      )
     case "mlp-big":
-      return mlpBig.update(rows: rows, labels: labels, seed: seed, hyper: mlpHyper, shouldStop: shouldStop, onEpoch: onEpoch)
+      return mlpBig.update(
+        rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed,
+        hyper: mlpHyper, shouldStop: shouldStop, onEpoch: onEpoch
+      )
     case "gaussian-nb":
-      return naiveBayes.updateBatch(rows: rows, labels: labels, seed: seed)
+      return naiveBayes.updateBatch(rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed)
     default:
-      return logistic.updateBatch(rows: rows, labels: labels, seed: seed, hyper: logisticHyper)
+      return logistic.updateBatch(
+        rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed, hyper: logisticHyper
+      )
     }
   }
 
@@ -885,6 +905,7 @@ final class FeatureModelBank {
       "f1": Double(rec?.f1 ?? 0),
       "bestTestAcc": Double(rec?.accuracy ?? 0),
       "trainSize": rec?.trainSize ?? 0,
+      "testSize": rec?.testSize ?? 0,
       "learnedCount": trainedIndex.count(modelId: modelId),
     ]
   }

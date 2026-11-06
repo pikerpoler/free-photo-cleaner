@@ -208,11 +208,25 @@ class CNNTrainerModule: RCTEventEmitter {
         return
       }
 
+      let seed = Int(Date().timeIntervalSince1970) % 10_000
+      guard let split = stratifiedInnerSplit(labels: y, seed: seed) else {
+        self.fail(
+          reject,
+          "TOO_FEW",
+          "Each training session needs at least 20 new photos this model has not learned yet, including at least 2 kept and 2 marked for deletion."
+        )
+        return
+      }
+      let trainIdx = split.0
+      let testIdx = split.1
+
       let metrics = self.bank.updateSelected(
         modelId: modelId,
         rows: rows,
         labels: y,
-        seed: Int(Date().timeIntervalSince1970) % 10_000,
+        trainIdx: trainIdx,
+        testIdx: testIdx,
+        seed: seed,
         mlpHyper: mlpHyper,
         logisticHyper: logisticHyper,
         catboostHyper: catboostHyper,
@@ -227,8 +241,8 @@ class CNNTrainerModule: RCTEventEmitter {
             "testAcc": Double(valAcc),
             "bestTestLoss": Double(valLoss),
             "bestTestAcc": Double(valAcc),
-            "trainSize": rows.count,
-            "testSize": 0,
+            "trainSize": trainIdx.count,
+            "testSize": testIdx.count,
             "learningRate": Double(lr),
             "done": false,
           ])
@@ -236,7 +250,13 @@ class CNNTrainerModule: RCTEventEmitter {
       )
 
       do {
-        try self.bank.saveSelected(modelId: modelId, newIds: sampleIds, metrics: metrics, trainSize: rows.count)
+        try self.bank.saveSelected(
+          modelId: modelId,
+          newIds: trainIdx.map { sampleIds[$0] },
+          metrics: metrics,
+          trainSize: trainIdx.count,
+          testSize: testIdx.count
+        )
       } catch {
         self.fail(reject, "SAVE_FAILED", error.localizedDescription)
         return
@@ -244,13 +264,13 @@ class CNNTrainerModule: RCTEventEmitter {
 
       let result: [String: Any] = [
         "epochsRan": metrics.epoch,
-        "bestTestLoss": metrics.trainLoss,
-        "bestTestAcc": metrics.trainAcc,
-        "accuracy": metrics.trainAcc,
+        "bestTestLoss": metrics.testLoss,
+        "bestTestAcc": metrics.testAcc,
+        "accuracy": metrics.testAcc,
         "f1": metrics.f1,
         "cancelled": self.stopRequested,
-        "trainSize": rows.count,
-        "testSize": 0,
+        "trainSize": trainIdx.count,
+        "testSize": testIdx.count,
         "skippedUnreadable": unreadable,
         "modelId": modelId,
         "trainResize": 0,

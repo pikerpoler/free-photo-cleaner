@@ -115,6 +115,8 @@ export interface ModelStatus {
   accuracy: number;
   f1: number;
   trainSize: number;
+  /** Held-out photos for this update. 0 on checkpoints saved before the split. */
+  testSize: number;
   learnedCount: number;
 }
 

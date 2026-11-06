@@ -355,7 +355,7 @@ export function SettingsScreen() {
           <>
             <Text style={[styles.filterLabel, isDark && styles.textSecondary]}>
               {hasModel && activeModelInfo
-                ? `Active: ${activeModelInfo.label ?? activeModelInfo.modelId} · accuracy ${((activeModelInfo.accuracy ?? activeModelInfo.bestTestAcc ?? 0) * 100).toFixed(0)}% · F1 ${(activeModelInfo.f1 ?? 0).toFixed(2)}`
+                ? `Active: ${activeModelInfo.label ?? activeModelInfo.modelId} · ${(activeModelInfo.testSize ?? 0) > 0 ? 'test accuracy' : 'accuracy'} ${((activeModelInfo.accuracy ?? activeModelInfo.bestTestAcc ?? 0) * 100).toFixed(0)}% · F1 ${(activeModelInfo.f1 ?? 0).toFixed(2)}`
                 : 'No trained model yet'}
             </Text>
             {checkpoints.length === 0 ? (
@@ -392,8 +392,12 @@ export function SettingsScreen() {
                           styles.checkpointMeta,
                           isDark && styles.textSecondary,
                         ]}>
-                        accuracy {((cp.accuracy ?? cp.bestTestAcc ?? 0) * 100).toFixed(0)}% · F1{' '}
-                        {(cp.f1 ?? 0).toFixed(2)} · {cp.trainSize ?? 0} photos in last update ·{' '}
+                        {(cp.testSize ?? 0) > 0 ? 'test accuracy' : 'accuracy'}{' '}
+                        {((cp.accuracy ?? cp.bestTestAcc ?? 0) * 100).toFixed(0)}% · F1{' '}
+                        {(cp.f1 ?? 0).toFixed(2)} ·{' '}
+                        {(cp.testSize ?? 0) > 0
+                          ? `trained ${cp.trainSize ?? 0} · tested ${cp.testSize} · `
+                          : `${cp.trainSize ?? 0} photos in last update · `}
                         {isNaN(date.getTime()) || date.getTime() === 0
                           ? '—'
                           : date.toLocaleDateString()}

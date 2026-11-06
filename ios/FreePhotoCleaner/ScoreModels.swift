@@ -2,7 +2,13 @@ import Foundation
 
 protocol FeatureScorer {
   var modelId: String { get }
-  mutating func updateBatch(rows: [[Float]], labels: [Float], seed: Int) -> TrainingBatchMetrics
+  mutating func updateBatch(
+    rows: [[Float]],
+    labels: [Float],
+    trainIdx: [Int],
+    testIdx: [Int],
+    seed: Int
+  ) -> TrainingBatchMetrics
   func predict(_ row: [Float]) -> Float
   func save(to dir: URL) throws
   mutating func load(from dir: URL) throws
@@ -10,20 +16,18 @@ protocol FeatureScorer {
 }
 
 struct TrainingBatchMetrics {
-  var trainLoss: Float
-  var trainAcc: Float
+  var testLoss: Float
+  var testAcc: Float
   var f1: Float
-  var innerLoss: Float
   var epoch: Int
   var accepted: Bool
 }
 
-func makeMetrics(labels: [Float], probs: [Float], innerLoss: Float, epoch: Int, accepted: Bool) -> TrainingBatchMetrics {
+func makeMetrics(labels: [Float], probs: [Float], epoch: Int, accepted: Bool) -> TrainingBatchMetrics {
   TrainingBatchMetrics(
-    trainLoss: logLoss(labels: labels, probs: probs),
-    trainAcc: accuracy(labels: labels, probs: probs),
+    testLoss: logLoss(labels: labels, probs: probs),
+    testAcc: accuracy(labels: labels, probs: probs),
     f1: f1Score(labels: labels, probs: probs),
-    innerLoss: innerLoss,
     epoch: epoch,
     accepted: accepted
   )
@@ -44,38 +48,44 @@ struct LogisticHessianScorer: FeatureScorer {
   private(set) var hasModel = false
   private var lastHyper = LogisticHyperparams()
 
-  mutating func updateBatch(rows: [[Float]], labels: [Float], seed: Int) -> TrainingBatchMetrics {
-    updateBatch(rows: rows, labels: labels, seed: seed, hyper: LogisticHyperparams())
+  mutating func updateBatch(
+    rows: [[Float]], labels: [Float], trainIdx: [Int], testIdx: [Int], seed: Int
+  ) -> TrainingBatchMetrics {
+    updateBatch(
+      rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed, hyper: LogisticHyperparams()
+    )
   }
 
   mutating func updateBatch(
-    rows: [[Float]], labels: [Float], seed: Int, hyper: LogisticHyperparams
+    rows: [[Float]], labels: [Float], trainIdx: [Int], testIdx: [Int], seed: Int, hyper: LogisticHyperparams
   ) -> TrainingBatchMetrics {
     _ = seed
     lastHyper = hyper
-    let weights = balancedWeights(labels: labels)
+    let trainRows = trainIdx.map { rows[$0] }
+    let trainLabels = trainIdx.map { labels[$0] }
+    let weights = balancedWeights(labels: trainLabels)
     if !hasModel {
-      scaler.fit(rows)
-      let zFit = rows.map { scaler.transform($0) }
+      scaler.fit(trainRows)
+      let zFit = trainRows.map { scaler.transform($0) }
       theta = fitLogisticLBFGS(
-        zFit, labels: labels, sampleWeights: weights, C: hyper.C, maxIter: hyper.maxIter, start: theta
+        zFit, labels: trainLabels, sampleWeights: weights, C: hyper.C, maxIter: hyper.maxIter, start: theta
       )
       hess = logisticHessian(
-        zFit, labels: labels, theta: theta, weights: weights, C: hyper.C, addL2Identity: true
+        zFit, labels: trainLabels, theta: theta, weights: weights, C: hyper.C, addL2Identity: true
       )
       hasModel = true
     } else {
-      let zFit = rows.map { scaler.transform($0) }
+      let zFit = trainRows.map { scaler.transform($0) }
       let updated = updateLogisticQuadratic(
-        zFit, labels: labels, theta: theta, hess: hess, weights: weights, C: hyper.C, maxIter: hyper.maxIter
+        zFit, labels: trainLabels, theta: theta, hess: hess, weights: weights, C: hyper.C, maxIter: hyper.maxIter
       )
-      let curv = dataCurvature(zFit, labels: labels, theta: updated, weights: weights, C: hyper.C)
+      let curv = dataCurvature(zFit, labels: trainLabels, theta: updated, weights: weights, C: hyper.C)
       hess = addMatrices(hess, curv)
       theta = updated
     }
-    let zEval = rows.map { scaler.transform($0) }
-    let probs = zEval.map { logisticProba($0, theta: theta) }
-    return makeMetrics(labels: labels, probs: probs, innerLoss: 0, epoch: 1, accepted: true)
+    let testLabels = testIdx.map { labels[$0] }
+    let probs = testIdx.map { predict(rows[$0]) }
+    return makeMetrics(labels: testLabels, probs: probs, epoch: 1, accepted: true)
   }
 
   func predict(_ row: [Float]) -> Float {
@@ -320,13 +330,17 @@ struct GaussianNBScorer: FeatureScorer {
   private var var1 = [Float](repeating: 1, count: FeatureSchema.dim)
   private(set) var hasModel = false
 
-  mutating func updateBatch(rows: [[Float]], labels: [Float], seed: Int) -> TrainingBatchMetrics {
+  mutating func updateBatch(
+    rows: [[Float]], labels: [Float], trainIdx: [Int], testIdx: [Int], seed: Int
+  ) -> TrainingBatchMetrics {
     _ = seed
-    if !hasModel { scaler.fit(rows); hasModel = true }
-    let zRows = rows.map { scaler.transform($0) }
-    let weights = balancedWeights(labels: labels)
+    let trainRows = trainIdx.map { rows[$0] }
+    let trainLabels = trainIdx.map { labels[$0] }
+    if !hasModel { scaler.fit(trainRows); hasModel = true }
+    let zRows = trainRows.map { scaler.transform($0) }
+    let weights = balancedWeights(labels: trainLabels)
     for i in 0..<zRows.count {
-      let y = labels[i] >= 0.5 ? 1 : 0
+      let y = trainLabels[i] >= 0.5 ? 1 : 0
       let w = weights[i]
       classCounts[y] += w
       var mean = y == 0 ? mean0 : mean1
@@ -342,8 +356,9 @@ struct GaussianNBScorer: FeatureScorer {
       var0[j] = max(var0[j] / max(classCounts[0], 1), 1e-6)
       var1[j] = max(var1[j] / max(classCounts[1], 1), 1e-6)
     }
-    let probs = zRows.map { predictScaled($0) }
-    return makeMetrics(labels: labels, probs: probs, innerLoss: 0, epoch: 1, accepted: true)
+    let testLabels = testIdx.map { labels[$0] }
+    let probs = testIdx.map { predict(rows[$0]) }
+    return makeMetrics(labels: testLabels, probs: probs, epoch: 1, accepted: true)
   }
 
   private func predictScaled(_ z: [Float]) -> Float {

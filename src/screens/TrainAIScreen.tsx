@@ -360,7 +360,7 @@ export function TrainAIScreen() {
   const explainDataset = useCallback(() => {
     Alert.alert(
       'Train locally',
-      'The images are passed through a feature extractor and fed into AI models to be trained locally. Nothing is uploaded. Older devices may experience slower training.\n\nEach training session is incremental and uses the photos the model hasn’t seen yet. To start over, you may delete the model.',
+      'The images are passed through a feature extractor and fed into AI models to be trained locally. Nothing is uploaded. Older devices may experience slower training.\n\nEach training session is incremental and uses the photos the model hasn’t seen yet. It learns 80% of those photos and scores accuracy and F1 on the other 20%. Test photos are not learned yet, so a later session can train on them. To start over, you may delete the model.',
     );
   }, []);
 
@@ -409,13 +409,11 @@ export function TrainAIScreen() {
           : skipped > 1
             ? ` ${skipped} labeled photos could not be read and were skipped.`
             : '';
-      const trainedNote = `Trained on ${result.trainSize} photo${
-        result.trainSize === 1 ? '' : 's'
-      }.${skipNote}`;
+      const trainedNote = `Trained on ${result.trainSize}, tested on ${result.testSize}.${skipNote}`;
       setStatusText(
         result.cancelled
-          ? `Stopped. Accuracy ${acc} · F1 ${f1}. ${trainedNote}`
-          : `Done. Accuracy ${acc} · F1 ${f1}. ${trainedNote}`,
+          ? `Stopped. Test accuracy ${acc} · F1 ${f1}. ${trainedNote}`
+          : `Done. Test accuracy ${acc} · F1 ${f1}. ${trainedNote}`,
       );
       await refreshModelStatus();
       reloadStatus();
@@ -542,7 +540,7 @@ export function TrainAIScreen() {
       </Text>
       <Text style={[styles.body, isDark && styles.textSecondary]}>
         Train updates only the selected model. Photos it has already learned are
-        skipped.
+        skipped. Each session learns 80% of the new photos and scores the other 20%.
       </Text>
 
       <Text style={[styles.section, isDark && styles.textDark, styles.sectionSpaced]}>
@@ -576,7 +574,7 @@ export function TrainAIScreen() {
         <View style={[styles.table, isDark && styles.chartDark]}>
           <View style={styles.tableRow}>
             <Text style={[styles.tableCell, isDark && styles.textSecondary]}>
-              Accuracy
+              {(modelStatus.testSize ?? 0) > 0 ? 'Test accuracy' : 'Accuracy'}
             </Text>
             <Text style={[styles.tableValue, isDark && styles.textDark]}>
               {(modelStatus.accuracy * 100).toFixed(0)}%
@@ -590,12 +588,20 @@ export function TrainAIScreen() {
           </View>
           <View style={styles.tableRow}>
             <Text style={[styles.tableCell, isDark && styles.textSecondary]}>
-              Photos in last update
+              {(modelStatus.testSize ?? 0) > 0 ? 'Trained' : 'Photos in last update'}
             </Text>
             <Text style={[styles.tableValue, isDark && styles.textDark]}>
               {modelStatus.trainSize}
             </Text>
           </View>
+          {(modelStatus.testSize ?? 0) > 0 && (
+            <View style={styles.tableRow}>
+              <Text style={[styles.tableCell, isDark && styles.textSecondary]}>Tested</Text>
+              <Text style={[styles.tableValue, isDark && styles.textDark]}>
+                {modelStatus.testSize}
+              </Text>
+            </View>
+          )}
           <View style={styles.tableRow}>
             <Text style={[styles.tableCell, isDark && styles.textSecondary]}>
               Photos learned
@@ -645,7 +651,7 @@ export function TrainAIScreen() {
             {progress?.phase === 'features' && progress.index != null
               ? `Extracting features ${progress.index}/${progress.total ?? '?'}`
               : progress
-                ? `Fitting · loss ${Number(progress.trainLoss).toFixed(3)} · acc ${(Number(progress.trainAcc) * 100).toFixed(0)}%`
+                ? `Fitting · test loss ${Number(progress.testLoss).toFixed(3)} · test acc ${(Number(progress.testAcc) * 100).toFixed(0)}%`
                 : 'Starting…'}
           </Text>
         </View>
