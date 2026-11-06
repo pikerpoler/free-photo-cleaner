@@ -1,5 +1,6 @@
-import React, {useState, useCallback, useRef} from 'react';
+import React, {useCallback, useRef} from 'react';
 import {StyleSheet, Text, TouchableWithoutFeedback, View} from 'react-native';
+import {useFocusEffect, useIsFocused} from '@react-navigation/native';
 import Video, {VideoRef} from 'react-native-video';
 import {MediaAsset} from '../types/media';
 import {formatFileSize, formatDate, formatDuration} from '../utils/format';
@@ -7,25 +8,33 @@ import {formatFileSize, formatDate, formatDuration} from '../utils/format';
 interface VideoCardProps {
   asset: MediaAsset;
   isActive: boolean;
+  muted: boolean;
+  onToggleMute: () => void;
 }
 
-export function VideoCard({asset, isActive}: VideoCardProps) {
-  const [muted, setMuted] = useState(true);
+export function VideoCard({
+  asset,
+  isActive,
+  muted,
+  onToggleMute,
+}: VideoCardProps) {
+  const isFocused = useIsFocused();
   const videoRef = useRef<VideoRef>(null);
+  const silent = !isActive || !isFocused || muted;
 
-  const toggleMute = useCallback(() => {
-    setMuted(prev => !prev);
-  }, []);
-
-  // Reset mute when card becomes active
-  React.useEffect(() => {
-    if (isActive) {
-      setMuted(true);
-    }
-  }, [isActive]);
+  // Pause immediately on blur. The tab stays mounted, so prop updates alone
+  // can arrive after the player has already kept playing audio.
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        videoRef.current?.pause();
+        videoRef.current?.setVolume(0);
+      };
+    }, []),
+  );
 
   return (
-    <TouchableWithoutFeedback onPress={toggleMute}>
+    <TouchableWithoutFeedback onPress={onToggleMute}>
       <View style={styles.container}>
         <Video
           ref={videoRef}
@@ -33,9 +42,11 @@ export function VideoCard({asset, isActive}: VideoCardProps) {
           style={styles.video}
           resizeMode="contain"
           repeat
-          muted={muted}
-          paused={!isActive}
+          muted={silent}
+          volume={silent ? 0 : 1}
+          paused={!isActive || !isFocused}
           playInBackground={false}
+          playWhenInactive={false}
         />
         <View style={styles.muteIndicator}>
           <Text style={styles.muteText}>{muted ? '🔇' : '🔊'}</Text>

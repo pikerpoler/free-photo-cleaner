@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect} from 'react';
+import React, {useCallback, useEffect, useState} from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -38,6 +38,10 @@ export function VideosScreen() {
   } = useQueueStore();
 
   const {videoSort, videoFilters, dateFilter} = useSettingsStore();
+  const [videosMuted, setVideosMuted] = useState(true);
+  const toggleVideoMute = useCallback(() => {
+    setVideosMuted(prev => !prev);
+  }, []);
 
   const videoFiltersRef = React.useRef(videoFilters);
   const dateFilterRef = React.useRef(dateFilter);
@@ -161,7 +165,12 @@ export function VideosScreen() {
         onSwipeRight={handleSwipeRight}
         cardKey={currentAsset.id}
         behindContent={nextAsset ? <MediaCard asset={nextAsset} /> : undefined}>
-        <VideoCard asset={currentAsset} isActive />
+        <VideoCard
+          asset={currentAsset}
+          isActive
+          muted={videosMuted}
+          onToggleMute={toggleVideoMute}
+        />
       </SwipeCard>
 
       <StorageBar />
