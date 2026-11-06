@@ -339,6 +339,53 @@ function removeLatestSwipeDecisionForAssetInTx(database: DB, assetId: string): v
   );
 }
 
+export function getPendingDeleteAggregate(
+  mediaType: MediaType,
+): {count: number; totalBytes: number} {
+  const database = getDatabase();
+  const result = database.executeSync(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(file_size), 0) AS bytes
+     FROM pending_deletes WHERE media_type = ?`,
+    [mediaType],
+  );
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  return {
+    count: (row?.n as number) || 0,
+    totalBytes: (row?.bytes as number) || 0,
+  };
+}
+
+export function getKeptAggregate(mediaType: MediaType): {
+  count: number;
+  totalBytes: number;
+} {
+  const database = getDatabase();
+  if (mediaType === 'photo') {
+    const result = database.executeSync(
+      `SELECT COUNT(*) AS n, COALESCE(SUM(COALESCE(c.file_size, 0)), 0) AS bytes
+       FROM kept_assets k
+       LEFT JOIN asset_catalog c ON c.id = k.id
+       WHERE c.media_type = 'photo' OR c.media_type IS NULL`,
+    );
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    return {
+      count: (row?.n as number) || 0,
+      totalBytes: (row?.bytes as number) || 0,
+    };
+  }
+  const result = database.executeSync(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(c.file_size), 0) AS bytes
+     FROM kept_assets k
+     INNER JOIN asset_catalog c ON c.id = k.id
+     WHERE c.media_type = 'video'`,
+  );
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  return {
+    count: (row?.n as number) || 0,
+    totalBytes: (row?.bytes as number) || 0,
+  };
+}
+
 export function getPendingDeletesByType(
   mediaType: string,
 ): Array<{id: string; uri: string; filename: string; fileSize: number}> {

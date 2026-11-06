@@ -37,11 +37,9 @@ export function VideoCard({asset, isActive}: VideoCardProps) {
           paused={!isActive}
           playInBackground={false}
         />
-        {muted && (
-          <View style={styles.muteIndicator}>
-            <Text style={styles.muteText}>🔇</Text>
-          </View>
-        )}
+        <View style={styles.muteIndicator}>
+          <Text style={styles.muteText}>{muted ? '🔇' : '🔊'}</Text>
+        </View>
         <View style={styles.metadataStrip}>
           <Text style={styles.metaText}>{formatDate(asset.creationDate)}</Text>
           <Text style={styles.metaText}>{formatFileSize(asset.fileSize)}</Text>

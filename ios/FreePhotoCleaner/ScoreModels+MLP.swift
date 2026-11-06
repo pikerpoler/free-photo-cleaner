@@ -644,7 +644,7 @@ final class FeatureModelBank {
   private var naiveBayes = GaussianNBScorer()
   private var records: [String: ModelScoreRecord] = [:]
   private var trainedIndex: TrainedPhotoIndex!
-  var activeModelId = "logistic-l2"
+  var activeModelId = "catboost"
 
   private var modelsDir: URL {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]

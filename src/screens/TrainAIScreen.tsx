@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -11,12 +11,11 @@ import {
   useColorScheme,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
+import {useFocusEffect} from '@react-navigation/native';
 import {useSettingsStore} from '../stores/settingsStore';
 import {useAIStore} from '../stores/aiStore';
-import {
-  getLabeledCounts,
-  getLabeledPhotoSamples,
-} from '../services/database';
+import {useQueueStore} from '../stores/queueStore';
+import {getLabeledPhotoSamples} from '../services/database';
 import {
   deleteModel,
   getModelStatus,
@@ -29,7 +28,6 @@ import {
   isMlpModel,
   LR_SCHEDULERS,
   LrSchedulerId,
-  MIN_LABELED_FOR_TRAIN,
   ModelStatus,
   TRAINABLE_MODELS,
   TrainableModelId,
@@ -42,10 +40,7 @@ import {
   sliderToMlpBatchSize,
   sliderToMlpLearningRate,
 } from '../ai/trainSliderScale';
-
-interface TrainAIScreenProps {
-  onClose?: () => void;
-}
+import {getSetting, setSetting, aiTrainingHistoryKey} from '../services/storage';
 
 type HistoryPoint = {
   epoch: number;
@@ -82,10 +77,7 @@ function MetricChart({
 
   const trainVals = points.map(p => (mode === 'loss' ? p.trainLoss : p.trainAcc));
   const testVals = points.map(p => (mode === 'loss' ? p.testLoss : p.testAcc));
-  const maxV =
-    mode === 'acc'
-      ? 1
-      : Math.max(0.01, ...trainVals, ...testVals);
+  const maxV = mode === 'acc' ? 1 : Math.max(0.01, ...trainVals, ...testVals);
 
   const toX = (i: number) =>
     pad +
@@ -124,7 +116,22 @@ function MetricChart({
   );
 }
 
-export function TrainAIScreen({onClose}: TrainAIScreenProps) {
+function persistMlpHistory(modelId: TrainableModelId, points: HistoryPoint[]) {
+  if (!isMlpModel(modelId)) return;
+  setSetting(aiTrainingHistoryKey(modelId), points);
+}
+
+function loadMlpHistory(modelId: TrainableModelId): HistoryPoint[] {
+  if (!isMlpModel(modelId)) return [];
+  return getSetting<HistoryPoint[]>(aiTrainingHistoryKey(modelId), []);
+}
+
+function clearMlpHistory(modelId: TrainableModelId) {
+  if (!isMlpModel(modelId)) return;
+  setSetting(aiTrainingHistoryKey(modelId), []);
+}
+
+export function TrainAIScreen() {
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
 
@@ -157,9 +164,16 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
     setAICatboostDepth,
     setAICatboostMinLeaf,
     setAICatboostMaxNewTrees,
+    setAISortModel,
   } = useSettingsStore();
 
-  const {refreshModelStatus, activeModelInfo, hasModel} = useAIStore();
+  const {
+    refreshModelStatus,
+    activeModelInfo,
+    hasModel,
+    selectSortModel,
+  } = useAIStore();
+  const resetAIQueue = useQueueStore(s => s.resetAIQueue);
 
   const [available, setAvailable] = useState(Platform.OS === 'ios');
   const [isTraining, setIsTraining] = useState(false);
@@ -168,6 +182,13 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [statusText, setStatusText] = useState('');
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<TrainableModelId>(aiModel);
+  const [trainBlocked, setTrainBlocked] = useState(false);
+
+  const selectedModelRef = useRef(selectedModel);
+  selectedModelRef.current = selectedModel;
+
   const [mlpLrSliderT, setMlpLrSliderT] = useState(() =>
     mlpLearningRateToSlider(aiStepSize),
   );
@@ -175,25 +196,99 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
     mlpBatchSizeToSlider(aiBatchSize),
   );
 
-  const mlp = isMlpModel(aiModel);
+  const mlp = isMlpModel(selectedModel);
   const labeledTotal = counts.kept + counts.pendingDelete;
-  const canTrain =
-    available &&
-    !isTraining &&
-    labeledTotal >= MIN_LABELED_FOR_TRAIN &&
-    counts.kept > 0 &&
-    counts.pendingDelete > 0;
+  const learnedCount = modelStatus?.learnedCount ?? 0;
+  const newSinceUpdate = Math.max(0, labeledTotal - learnedCount);
+
+  const meetsRules =
+    newSinceUpdate >= 20 && counts.kept >= 2 && counts.pendingDelete >= 2;
+
+  const canTrain = available && !isTraining && !trainBlocked && meetsRules;
+
+  const blockMessage =
+    !available || isTraining || canTrain
+      ? ''
+      : 'Each training session needs at least 20 new photos this model has not learned yet, including at least 2 kept and 2 marked for deletion.';
+
+  const readyMessage = canTrain
+    ? `${newSinceUpdate} new photo${newSinceUpdate === 1 ? '' : 's'} since the last update.`
+    : '';
 
   const reloadStatus = useCallback(() => {
-    getModelStatus(aiModel).then(setModelStatus);
-  }, [aiModel]);
+    getModelStatus(selectedModel).then(setModelStatus);
+  }, [selectedModel]);
+
+  const reloadCounts = useCallback(() => {
+    const samples = getLabeledPhotoSamples();
+    let kept = 0;
+    let pendingDelete = 0;
+    for (const sample of samples) {
+      if (sample.label === 0) kept += 1;
+      else pendingDelete += 1;
+    }
+    setCounts({kept, pendingDelete});
+  }, []);
 
   useEffect(() => {
-    setCounts(getLabeledCounts());
-    refreshModelStatus();
+    setTrainBlocked(false);
+  }, [selectedModel, counts.kept, counts.pendingDelete]);
+
+  useEffect(() => {
+    reloadCounts();
     isTrainerAvailable().then(setAvailable);
+  }, [reloadCounts]);
+
+  useFocusEffect(
+    useCallback(() => {
+      setSelectedModel(useSettingsStore.getState().aiModel);
+      refreshModelStatus().catch(() => {});
+      reloadCounts();
+      reloadStatus();
+      return () => {
+        const target = selectedModelRef.current;
+        const state = useAIStore.getState();
+        const activeId = state.activeModelInfo?.modelId;
+        const photoSort = useSettingsStore.getState().photoSort;
+        setAISortModel(target);
+        setAIModel(target);
+        if (activeId === target) return;
+        (async () => {
+          try {
+            await selectSortModel(target);
+            if (photoSort === 'ai') {
+              await resetAIQueue();
+            }
+          } catch (e: unknown) {
+            Alert.alert(
+              'Model sync failed',
+              e instanceof Error ? e.message : String(e),
+            );
+          }
+        })().catch(() => {});
+      };
+    }, [
+      refreshModelStatus,
+      reloadStatus,
+      reloadCounts,
+      selectSortModel,
+      setAISortModel,
+      setAIModel,
+      resetAIQueue,
+    ]),
+  );
+
+  useEffect(() => {
     reloadStatus();
-  }, [refreshModelStatus, reloadStatus]);
+  }, [selectedModel, reloadStatus]);
+
+  useEffect(() => {
+    if (mlp) {
+      setHistory(loadMlpHistory(selectedModel));
+    } else {
+      setHistory([]);
+    }
+  }, [selectedModel, mlp]);
 
   useEffect(() => {
     setMlpLrSliderT(mlpLearningRateToSlider(aiStepSize));
@@ -211,34 +306,40 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
       }
       if (p.phase === 'fit' && p.done === false) {
         setHistory(prev => {
-        const next = prev.filter(h => h.epoch !== p.epoch);
-        next.push({
-          epoch: p.epoch,
-          trainLoss: p.trainLoss,
-          testLoss: p.testLoss,
-          trainAcc: p.trainAcc ?? 0,
-          testAcc: p.testAcc ?? 0,
+          const next = prev.filter(h => h.epoch !== p.epoch);
+          next.push({
+            epoch: p.epoch,
+            trainLoss: p.trainLoss,
+            testLoss: p.testLoss,
+            trainAcc: p.trainAcc ?? 0,
+            testAcc: p.testAcc ?? 0,
+          });
+          next.sort((a, b) => a.epoch - b.epoch);
+          if (isMlpModel(selectedModelRef.current)) {
+            persistMlpHistory(selectedModelRef.current, next);
+          }
+          return next;
         });
-        next.sort((a, b) => a.epoch - b.epoch);
-        return next;
-      });
       }
     });
+  }, []);
+
+  const explainDataset = useCallback(() => {
+    Alert.alert(
+      'Train locally',
+      'The images are passed through a feature extractor and fed into AI models to be trained locally. Nothing is uploaded. Older devices may experience slower training.\n\nEach training session is incremental and uses the photos the model hasn’t seen yet. To start over, you may delete the model.',
+    );
   }, []);
 
   const handleTrain = useCallback(async () => {
     if (!canTrain) return;
     const samples = getLabeledPhotoSamples();
-    if (samples.length < MIN_LABELED_FOR_TRAIN) {
-      Alert.alert(
-        'Not enough labels',
-        `Need at least ${MIN_LABELED_FOR_TRAIN} labeled photos.`,
-      );
-      return;
-    }
-
     setIsTraining(true);
-    setHistory([]);
+    const trainModel = selectedModel;
+    if (isMlpModel(trainModel)) {
+      clearMlpHistory(trainModel);
+      setHistory([]);
+    }
     setProgress(null);
     setStatusText('Starting training...');
 
@@ -246,7 +347,7 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
       const result = await startTraining({
         uris: samples.map(s => s.uri),
         labels: samples.map(s => s.label),
-        modelId: aiModel,
+        modelId: trainModel,
         batchSize: aiBatchSize,
         learningRate: aiStepSize,
         maxEpochs: aiEpochs,
@@ -268,23 +369,50 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
             ? `${(result.bestTestAcc * 100).toFixed(0)}%`
             : 'n/a';
       const f1 = result.f1 != null ? result.f1.toFixed(2) : 'n/a';
+      const skipped = result.skippedUnreadable ?? 0;
+      const skipNote =
+        skipped === 1
+          ? ' 1 labeled photo could not be read and was skipped.'
+          : skipped > 1
+            ? ` ${skipped} labeled photos could not be read and were skipped.`
+            : '';
+      const trainedNote = `Trained on ${result.trainSize} photo${
+        result.trainSize === 1 ? '' : 's'
+      }.${skipNote}`;
       setStatusText(
         result.cancelled
-          ? `Stopped. Accuracy ${acc} · F1 ${f1}`
-          : `Done. Accuracy ${acc} · F1 ${f1} on ${result.trainSize} new photos`,
+          ? `Stopped. Accuracy ${acc} · F1 ${f1}. ${trainedNote}`
+          : `Done. Accuracy ${acc} · F1 ${f1}. ${trainedNote}`,
       );
       await refreshModelStatus();
       reloadStatus();
+      reloadCounts();
     } catch (e: unknown) {
+      const err = e as {code?: string; message?: string};
+      const code = err.code ?? '';
       const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert('Training failed', msg);
-      setStatusText(msg);
+      const blocked =
+        code === 'NO_NEW' ||
+        code === 'TOO_FEW' ||
+        msg.includes('already includes every labeled') ||
+        msg.includes('Each training session needs') ||
+        msg.includes('Need at least');
+      if (blocked) {
+        setTrainBlocked(true);
+        setStatusText('');
+      } else {
+        Alert.alert('Training failed', msg);
+        setStatusText(msg);
+      }
+      await refreshModelStatus();
+      reloadStatus();
+      reloadCounts();
     } finally {
       setIsTraining(false);
     }
   }, [
     canTrain,
-    aiModel,
+    selectedModel,
     aiBatchSize,
     aiStepSize,
     aiEpochs,
@@ -300,73 +428,68 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
     aiCatboostMaxNewTrees,
     refreshModelStatus,
     reloadStatus,
+    reloadCounts,
   ]);
 
-  const explainTraining = useCallback(() => {
-    Alert.alert(
-      'Incremental training',
-      'Train adds only photos this model has not seen. The same labeled photos can train a different model, and their feature vectors stay cached. To fit this model again from scratch, delete it at the bottom of the screen.',
-    );
-  }, []);
-
   const confirmDelete = useCallback(() => {
-    const label = TRAINABLE_MODELS.find(m => m.id === aiModel)?.label ?? aiModel;
+    const label =
+      TRAINABLE_MODELS.find(m => m.id === selectedModel)?.label ?? selectedModel;
     Alert.alert(
       `Delete ${label}?`,
-      'This clears its weights and which photos it has learned. The other models stay as they are.',
+      `This will delete ${label}'s weights. This action is irreversible. Are you sure?`,
       [
         {text: 'Cancel', style: 'cancel'},
         {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            await deleteModel(aiModel);
+            await deleteModel(selectedModel);
+            clearMlpHistory(selectedModel);
             setHistory([]);
             setStatusText(`${label} deleted. The next train starts from scratch.`);
             await refreshModelStatus();
             reloadStatus();
+            reloadCounts();
           },
         },
       ],
     );
-  }, [aiModel, refreshModelStatus, reloadStatus]);
+  }, [selectedModel, refreshModelStatus, reloadStatus, reloadCounts]);
+
+  const onSelectModel = (id: TrainableModelId) => {
+    if (isTraining) return;
+    setSelectedModel(id);
+    setAIModel(id);
+  };
 
   return (
     <ScrollView
       style={[styles.container, isDark && styles.bgDark]}
       contentContainerStyle={styles.content}>
-      <View style={styles.headerRow}>
-        <Text style={[styles.title, isDark && styles.textDark]}>Train AI</Text>
-        {onClose && (
-          <TouchableOpacity onPress={onClose}>
-            <Text style={styles.close}>Close</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
       {!available && (
         <Text style={styles.warn}>
           On-device feature training is available on iOS only.
         </Text>
       )}
 
-      <Text style={[styles.section, isDark && styles.textDark]}>Dataset</Text>
+      <View style={styles.headerRow}>
+        <Text style={[styles.section, isDark && styles.textDark]}>Dataset</Text>
+        <TouchableOpacity onPress={explainDataset} hitSlop={8}>
+          <Text style={styles.info}>ⓘ</Text>
+        </TouchableOpacity>
+      </View>
       <Text style={[styles.body, isDark && styles.textSecondary]}>
         Kept: {counts.kept} · Marked for deletion: {counts.pendingDelete} ·
         Total: {labeledTotal}
       </Text>
       <Text style={[styles.body, isDark && styles.textSecondary]}>
-        Train updates only the selected model. Photos it has already learned are skipped.
+        Train updates only the selected model. Photos it has already learned are
+        skipped.
       </Text>
 
-      <View style={styles.headerRow}>
-        <Text style={[styles.section, isDark && styles.textDark, styles.sectionInline]}>
-          Model
-        </Text>
-        <TouchableOpacity onPress={explainTraining} hitSlop={8}>
-          <Text style={styles.info}>ⓘ</Text>
-        </TouchableOpacity>
-      </View>
+      <Text style={[styles.section, isDark && styles.textDark, styles.sectionSpaced]}>
+        Model
+      </Text>
       <View style={styles.chipRow}>
         {TRAINABLE_MODELS.map(opt => (
           <TouchableOpacity
@@ -374,15 +497,15 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
             style={[
               styles.chip,
               isDark && styles.chipDark,
-              aiModel === opt.id && styles.chipActive,
+              selectedModel === opt.id && styles.chipActive,
             ]}
             disabled={isTraining}
-            onPress={() => setAIModel(opt.id as TrainableModelId)}>
+            onPress={() => onSelectModel(opt.id as TrainableModelId)}>
             <Text
               style={[
                 styles.chipText,
                 isDark && styles.textDark,
-                aiModel === opt.id && styles.chipTextActive,
+                selectedModel === opt.id && styles.chipTextActive,
               ]}>
               {opt.label}
             </Text>
@@ -390,275 +513,13 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
         ))}
       </View>
 
-      {aiModel === 'logistic-l2' && (
-        <>
-          <Text style={[styles.label, isDark && styles.textDark]}>
-            Regularization C: {aiLogisticC.toFixed(2)}
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={0.01}
-            maximumValue={10}
-            step={0.01}
-            value={aiLogisticC}
-            disabled={isTraining}
-            onSlidingComplete={v => setAILogisticC(parseFloat(v.toFixed(2)))}
-            minimumTrackTintColor="#007AFF"
-          />
-          <Text style={[styles.label, isDark && styles.textDark]}>
-            Max iterations: {aiLogisticMaxIter}
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={50}
-            maximumValue={2000}
-            step={50}
-            value={aiLogisticMaxIter}
-            disabled={isTraining}
-            onSlidingComplete={v => setAILogisticMaxIter(v)}
-            minimumTrackTintColor="#007AFF"
-          />
-        </>
-      )}
-
-      {aiModel === 'catboost' && (
-        <>
-          <Text style={[styles.label, isDark && styles.textDark]}>
-            Learning rate: {aiCatboostLearningRate.toFixed(2)}
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={0.01}
-            maximumValue={0.5}
-            step={0.01}
-            value={aiCatboostLearningRate}
-            disabled={isTraining}
-            onSlidingComplete={v =>
-              setAICatboostLearningRate(parseFloat(v.toFixed(2)))
-            }
-            minimumTrackTintColor="#007AFF"
-          />
-          <Text style={[styles.label, isDark && styles.textDark]}>
-            Tree depth: {aiCatboostDepth}
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={1}
-            maximumValue={8}
-            step={1}
-            value={aiCatboostDepth}
-            disabled={isTraining}
-            onSlidingComplete={v => setAICatboostDepth(v)}
-            minimumTrackTintColor="#007AFF"
-          />
-          <Text style={[styles.label, isDark && styles.textDark]}>
-            Min photos per leaf: {aiCatboostMinLeaf}
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={2}
-            maximumValue={32}
-            step={1}
-            value={aiCatboostMinLeaf}
-            disabled={isTraining}
-            onSlidingComplete={v => setAICatboostMinLeaf(v)}
-            minimumTrackTintColor="#007AFF"
-          />
-          <Text style={[styles.label, isDark && styles.textDark]}>
-            New trees per train: {aiCatboostMaxNewTrees}
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={5}
-            maximumValue={100}
-            step={5}
-            value={aiCatboostMaxNewTrees}
-            disabled={isTraining}
-            onSlidingComplete={v => setAICatboostMaxNewTrees(v)}
-            minimumTrackTintColor="#007AFF"
-          />
-        </>
-      )}
-
-      {mlp && (
-        <>
-          <Text style={[styles.label, isDark && styles.textDark]}>
-            Train epochs: {aiEpochs}
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={10}
-            maximumValue={200}
-            step={5}
-            value={aiEpochs}
-            disabled={isTraining}
-            onSlidingComplete={v => setAIEpochs(v)}
-            minimumTrackTintColor="#007AFF"
-          />
-          <Text style={[styles.label, isDark && styles.textDark]}>
-            Batch size: {sliderToMlpBatchSize(mlpBatchSliderT)}
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={0}
-            maximumValue={1}
-            value={mlpBatchSliderT}
-            disabled={isTraining}
-            onValueChange={setMlpBatchSliderT}
-            onSlidingComplete={t => {
-              const batch = sliderToMlpBatchSize(t);
-              setAIBatchSize(batch);
-              setMlpBatchSliderT(mlpBatchSizeToSlider(batch));
-            }}
-            minimumTrackTintColor="#007AFF"
-          />
-          <Text style={[styles.label, isDark && styles.textDark]}>
-            Learning rate:{' '}
-            {formatMlpLearningRate(sliderToMlpLearningRate(mlpLrSliderT))}
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={0}
-            maximumValue={1}
-            value={mlpLrSliderT}
-            disabled={isTraining}
-            onValueChange={setMlpLrSliderT}
-            onSlidingComplete={t => {
-              const lr = sliderToMlpLearningRate(t);
-              setAIStepSize(lr);
-              setMlpLrSliderT(mlpLearningRateToSlider(lr));
-            }}
-            minimumTrackTintColor="#007AFF"
-          />
-          <Text style={[styles.label, isDark && styles.textDark]}>LR scheduler</Text>
-          <View style={styles.chipRow}>
-            {LR_SCHEDULERS.map(opt => (
-              <TouchableOpacity
-                key={opt.id}
-                style={[
-                  styles.chip,
-                  isDark && styles.chipDark,
-                  aiLrScheduler === opt.id && styles.chipActive,
-                ]}
-                disabled={isTraining}
-                onPress={() => setAILrScheduler(opt.id as LrSchedulerId)}>
-                <Text
-                  style={[
-                    styles.chipText,
-                    isDark && styles.textDark,
-                    aiLrScheduler === opt.id && styles.chipTextActive,
-                  ]}>
-                  {opt.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          {aiLrScheduler === 'step' && (
-            <>
-              <Text style={[styles.label, isDark && styles.textDark]}>
-                Step gamma: {aiStepGamma.toFixed(2)}
-              </Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0.1}
-                maximumValue={0.9}
-                step={0.05}
-                value={aiStepGamma}
-                disabled={isTraining}
-                onSlidingComplete={v => setAIStepGamma(parseFloat(v.toFixed(2)))}
-                minimumTrackTintColor="#007AFF"
-              />
-              <Text style={[styles.label, isDark && styles.textDark]}>
-                Step every N epochs: {aiStepSizeEpochs}
-              </Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={1}
-                maximumValue={20}
-                step={1}
-                value={aiStepSizeEpochs}
-                disabled={isTraining}
-                onSlidingComplete={v => setAIStepSizeEpochs(v)}
-                minimumTrackTintColor="#007AFF"
-              />
-            </>
-          )}
-          {aiLrScheduler === 'exponential' && (
-            <>
-              <Text style={[styles.label, isDark && styles.textDark]}>
-                Decay: {aiExpDecay.toFixed(2)}
-              </Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0.8}
-                maximumValue={0.99}
-                step={0.01}
-                value={aiExpDecay}
-                disabled={isTraining}
-                onSlidingComplete={v => setAIExpDecay(parseFloat(v.toFixed(2)))}
-                minimumTrackTintColor="#007AFF"
-              />
-            </>
-          )}
-        </>
-      )}
-      <View style={styles.actions}>
-        {!isTraining ? (
-          <TouchableOpacity
-            style={[styles.primaryBtn, !canTrain && styles.btnDisabled]}
-            disabled={!canTrain}
-            onPress={handleTrain}>
-            <Text style={styles.primaryBtnText}>Train</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={styles.stopBtn}
-            onPress={async () => {
-              await stopTraining();
-              setStatusText('Stop requested...');
-            }}>
-            <Text style={styles.primaryBtnText}>Stop</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {isTraining && (
-        <View style={styles.statusRow}>
-          <ActivityIndicator color="#007AFF" />
-          <Text style={[styles.body, isDark && styles.textDark]}>
-            {progress?.phase === 'features' && progress.index != null
-              ? `Extracting features ${progress.index}/${progress.total ?? '?'}`
-              : progress
-                ? `Fitting · loss ${Number(progress.trainLoss).toFixed(3)} · acc ${(Number(progress.trainAcc) * 100).toFixed(0)}%`
-                : 'Starting…'}
-          </Text>
-        </View>
-      )}
-
-      {mlp && (
-        <>
-          <Text style={[styles.section, isDark && styles.textDark]}>Loss</Text>
-          <MetricChart
-            points={history}
-            isDark={isDark}
-            mode="loss"
-            emptyHint="Loss graph appears while the MLP trains"
-          />
-          <Text style={[styles.section, isDark && styles.textDark]}>Accuracy</Text>
-          <MetricChart
-            points={history}
-            isDark={isDark}
-            mode="acc"
-            emptyHint="Accuracy graph appears while the MLP trains"
-          />
-        </>
-      )}
-
       <Text style={[styles.section, isDark && styles.textDark]}>Last update</Text>
       {modelStatus?.hasModel ? (
         <View style={[styles.table, isDark && styles.chartDark]}>
           <View style={styles.tableRow}>
-            <Text style={[styles.tableCell, isDark && styles.textSecondary]}>Accuracy</Text>
+            <Text style={[styles.tableCell, isDark && styles.textSecondary]}>
+              Accuracy
+            </Text>
             <Text style={[styles.tableValue, isDark && styles.textDark]}>
               {(modelStatus.accuracy * 100).toFixed(0)}%
             </Text>
@@ -692,27 +553,318 @@ export function TrainAIScreen({onClose}: TrainAIScreenProps) {
         </Text>
       )}
 
+      {!!blockMessage && <Text style={styles.prereq}>{blockMessage}</Text>}
+      {!!readyMessage && (
+        <Text style={[styles.readyHint, isDark && styles.textSecondary]}>
+          {readyMessage}
+        </Text>
+      )}
+
+      <View style={styles.actions}>
+        {!isTraining ? (
+          <TouchableOpacity
+            style={[styles.primaryBtn, !canTrain && styles.btnDisabled]}
+            disabled={!canTrain}
+            onPress={handleTrain}>
+            <Text style={styles.primaryBtnText}>Train</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={styles.stopBtn}
+            onPress={async () => {
+              await stopTraining();
+              setStatusText('Stop requested...');
+            }}>
+            <Text style={styles.primaryBtnText}>Stop</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {isTraining && (
+        <View style={styles.statusRow}>
+          <ActivityIndicator color="#007AFF" />
+          <Text style={[styles.body, isDark && styles.textDark]}>
+            {progress?.phase === 'features' && progress.index != null
+              ? `Extracting features ${progress.index}/${progress.total ?? '?'}`
+              : progress
+                ? `Fitting · loss ${Number(progress.trainLoss).toFixed(3)} · acc ${(Number(progress.trainAcc) * 100).toFixed(0)}%`
+                : 'Starting…'}
+          </Text>
+        </View>
+      )}
+
+      {selectedModel !== 'gaussian-nb' && (
+        <TouchableOpacity
+          style={styles.advancedToggle}
+          onPress={() => setAdvancedOpen(o => !o)}
+          disabled={isTraining}>
+          <Text style={[styles.advancedToggleText, isDark && styles.textDark]}>
+            {advancedOpen ? '▾ Advanced' : '▸ Advanced'}
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      {advancedOpen && selectedModel !== 'gaussian-nb' && (
+        <>
+          {selectedModel === 'logistic-l2' && (
+            <>
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                Regularization C: {aiLogisticC.toFixed(2)}
+              </Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={0.01}
+                maximumValue={10}
+                step={0.01}
+                value={aiLogisticC}
+                disabled={isTraining}
+                onSlidingComplete={v => setAILogisticC(parseFloat(v.toFixed(2)))}
+                minimumTrackTintColor="#007AFF"
+              />
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                Max iterations: {aiLogisticMaxIter}
+              </Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={50}
+                maximumValue={2000}
+                step={50}
+                value={aiLogisticMaxIter}
+                disabled={isTraining}
+                onSlidingComplete={v => setAILogisticMaxIter(v)}
+                minimumTrackTintColor="#007AFF"
+              />
+            </>
+          )}
+
+          {selectedModel === 'catboost' && (
+            <>
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                Learning rate: {aiCatboostLearningRate.toFixed(2)}
+              </Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={0.01}
+                maximumValue={0.5}
+                step={0.01}
+                value={aiCatboostLearningRate}
+                disabled={isTraining}
+                onSlidingComplete={v =>
+                  setAICatboostLearningRate(parseFloat(v.toFixed(2)))
+                }
+                minimumTrackTintColor="#007AFF"
+              />
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                Tree depth: {aiCatboostDepth}
+              </Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={1}
+                maximumValue={8}
+                step={1}
+                value={aiCatboostDepth}
+                disabled={isTraining}
+                onSlidingComplete={v => setAICatboostDepth(v)}
+                minimumTrackTintColor="#007AFF"
+              />
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                Min photos per leaf: {aiCatboostMinLeaf}
+              </Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={2}
+                maximumValue={32}
+                step={1}
+                value={aiCatboostMinLeaf}
+                disabled={isTraining}
+                onSlidingComplete={v => setAICatboostMinLeaf(v)}
+                minimumTrackTintColor="#007AFF"
+              />
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                New trees per train: {aiCatboostMaxNewTrees}
+              </Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={5}
+                maximumValue={100}
+                step={5}
+                value={aiCatboostMaxNewTrees}
+                disabled={isTraining}
+                onSlidingComplete={v => setAICatboostMaxNewTrees(v)}
+                minimumTrackTintColor="#007AFF"
+              />
+            </>
+          )}
+
+          {mlp && (
+            <>
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                Train epochs: {aiEpochs}
+              </Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={10}
+                maximumValue={200}
+                step={5}
+                value={aiEpochs}
+                disabled={isTraining}
+                onSlidingComplete={v => setAIEpochs(v)}
+                minimumTrackTintColor="#007AFF"
+              />
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                Batch size: {sliderToMlpBatchSize(mlpBatchSliderT)}
+              </Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={0}
+                maximumValue={1}
+                value={mlpBatchSliderT}
+                disabled={isTraining}
+                onValueChange={setMlpBatchSliderT}
+                onSlidingComplete={t => {
+                  const batch = sliderToMlpBatchSize(t);
+                  setAIBatchSize(batch);
+                  setMlpBatchSliderT(mlpBatchSizeToSlider(batch));
+                }}
+                minimumTrackTintColor="#007AFF"
+              />
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                Learning rate:{' '}
+                {formatMlpLearningRate(sliderToMlpLearningRate(mlpLrSliderT))}
+              </Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={0}
+                maximumValue={1}
+                value={mlpLrSliderT}
+                disabled={isTraining}
+                onValueChange={setMlpLrSliderT}
+                onSlidingComplete={t => {
+                  const lr = sliderToMlpLearningRate(t);
+                  setAIStepSize(lr);
+                  setMlpLrSliderT(mlpLearningRateToSlider(lr));
+                }}
+                minimumTrackTintColor="#007AFF"
+              />
+              <Text style={[styles.label, isDark && styles.textDark]}>LR scheduler</Text>
+              <View style={styles.chipRow}>
+                {LR_SCHEDULERS.map(opt => (
+                  <TouchableOpacity
+                    key={opt.id}
+                    style={[
+                      styles.chip,
+                      isDark && styles.chipDark,
+                      aiLrScheduler === opt.id && styles.chipActive,
+                    ]}
+                    disabled={isTraining}
+                    onPress={() => setAILrScheduler(opt.id as LrSchedulerId)}>
+                    <Text
+                      style={[
+                        styles.chipText,
+                        isDark && styles.textDark,
+                        aiLrScheduler === opt.id && styles.chipTextActive,
+                      ]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {aiLrScheduler === 'step' && (
+                <>
+                  <Text style={[styles.label, isDark && styles.textDark]}>
+                    Step gamma: {aiStepGamma.toFixed(2)}
+                  </Text>
+                  <Slider
+                    style={styles.slider}
+                    minimumValue={0.1}
+                    maximumValue={0.9}
+                    step={0.05}
+                    value={aiStepGamma}
+                    disabled={isTraining}
+                    onSlidingComplete={v =>
+                      setAIStepGamma(parseFloat(v.toFixed(2)))
+                    }
+                    minimumTrackTintColor="#007AFF"
+                  />
+                  <Text style={[styles.label, isDark && styles.textDark]}>
+                    Step every N epochs: {aiStepSizeEpochs}
+                  </Text>
+                  <Slider
+                    style={styles.slider}
+                    minimumValue={1}
+                    maximumValue={20}
+                    step={1}
+                    value={aiStepSizeEpochs}
+                    disabled={isTraining}
+                    onSlidingComplete={v => setAIStepSizeEpochs(v)}
+                    minimumTrackTintColor="#007AFF"
+                  />
+                </>
+              )}
+              {aiLrScheduler === 'exponential' && (
+                <>
+                  <Text style={[styles.label, isDark && styles.textDark]}>
+                    Decay: {aiExpDecay.toFixed(2)}
+                  </Text>
+                  <Slider
+                    style={styles.slider}
+                    minimumValue={0.8}
+                    maximumValue={0.99}
+                    step={0.01}
+                    value={aiExpDecay}
+                    disabled={isTraining}
+                    onSlidingComplete={v =>
+                      setAIExpDecay(parseFloat(v.toFixed(2)))
+                    }
+                    minimumTrackTintColor="#007AFF"
+                  />
+                </>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {mlp && (
+        <>
+          <Text style={[styles.section, isDark && styles.textDark]}>Loss</Text>
+          <MetricChart
+            points={history}
+            isDark={isDark}
+            mode="loss"
+            emptyHint="No training run yet for this model"
+          />
+          <Text style={[styles.section, isDark && styles.textDark]}>Accuracy</Text>
+          <MetricChart
+            points={history}
+            isDark={isDark}
+            mode="acc"
+            emptyHint="No training run yet for this model"
+          />
+        </>
+      )}
+
       {!!statusText && (
         <Text style={[styles.body, isDark && styles.textSecondary]}>
           {statusText}
         </Text>
       )}
 
-      <Text style={[styles.section, isDark && styles.textDark]}>
-        Active model
-      </Text>
       <Text style={[styles.body, isDark && styles.textSecondary]}>
         {hasModel && activeModelInfo
-          ? `${TRAINABLE_MODELS.find(m => m.id === activeModelInfo.modelId)?.label ?? activeModelInfo.modelId}`
-          : 'No trained model yet.'}
+          ? `Scores use: ${TRAINABLE_MODELS.find(m => m.id === activeModelInfo.modelId)?.label ?? activeModelInfo.modelId}`
+          : 'No trained model loaded for scoring yet.'}
       </Text>
 
       <TouchableOpacity
-        style={[styles.deleteBtn, (!modelStatus?.hasModel || isTraining) && styles.btnDisabled]}
+        style={[
+          styles.deleteBtn,
+          (!modelStatus?.hasModel || isTraining) && styles.btnDisabled,
+        ]}
         disabled={!modelStatus?.hasModel || isTraining}
         onPress={confirmDelete}>
         <Text style={styles.deleteBtnText}>
-          Delete {TRAINABLE_MODELS.find(m => m.id === aiModel)?.label ?? 'model'}
+          Delete {TRAINABLE_MODELS.find(m => m.id === selectedModel)?.label ?? 'model'}
         </Text>
       </TouchableOpacity>
     </ScrollView>
@@ -727,25 +879,35 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    marginTop: 4,
+    marginBottom: 4,
   },
-  title: {fontSize: 22, fontWeight: '700', color: '#111'},
-  close: {fontSize: 16, color: '#007AFF', fontWeight: '600'},
   section: {
     fontSize: 17,
     fontWeight: '700',
     color: '#333',
-    marginTop: 20,
+    marginTop: 16,
     marginBottom: 8,
   },
-  sectionInline: {marginTop: 12, marginBottom: 0},
-  info: {fontSize: 18, color: '#007AFF', marginTop: 12},
+  sectionSpaced: {marginTop: 20},
+  info: {fontSize: 18, color: '#007AFF'},
   label: {fontSize: 14, color: '#333', marginTop: 12},
   body: {fontSize: 14, color: '#555', marginBottom: 4},
   textDark: {color: '#fff'},
   textSecondary: {color: '#8e8e93'},
   hint: {fontSize: 12, color: '#8e8e93', marginTop: 4},
   warn: {fontSize: 13, color: '#ff9500', marginTop: 6},
+  prereq: {
+    fontSize: 13,
+    color: '#ff9500',
+    marginTop: 12,
+    lineHeight: 18,
+  },
+  readyHint: {
+    fontSize: 13,
+    color: '#8e8e93',
+    marginTop: 12,
+  },
   chipRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 8},
   chip: {
     paddingHorizontal: 12,
@@ -758,13 +920,7 @@ const styles = StyleSheet.create({
   chipText: {fontSize: 13, color: '#333'},
   chipTextActive: {color: '#fff', fontWeight: '600'},
   slider: {height: 32, marginVertical: 4},
-  augBlock: {marginTop: 8},
-  augRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  actions: {marginTop: 20},
+  actions: {marginTop: 12},
   primaryBtn: {
     backgroundColor: '#007AFF',
     paddingVertical: 14,
@@ -801,6 +957,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     marginTop: 12,
+  },
+  advancedToggle: {
+    marginTop: 16,
+    paddingVertical: 8,
+  },
+  advancedToggleText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#007AFF',
   },
   chart: {
     marginTop: 8,

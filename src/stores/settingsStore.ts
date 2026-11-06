@@ -115,7 +115,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   videoFilters: DEFAULT_VIDEO_FILTERS,
   dateFilter: getDefaultDateFilter(),
   theme: 'system',
-  aiModel: 'logistic-l2',
+  aiModel: 'catboost',
   aiSortModel: null,
   aiBatchSize: 8,
   aiStepSize: 0.001,
@@ -257,7 +257,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   loadSettings: () => {
-    const rawModel = getSetting(KEYS.AI_MODEL, 'logistic-l2' as string);
+    const rawModel = getSetting(KEYS.AI_MODEL, 'catboost' as string);
     const rawSort = getSetting<string | null>(KEYS.AI_SORT_MODEL, null);
     set({
       photoSort: getSetting(KEYS.PHOTO_SORT, 'newest_first' as SortMode),

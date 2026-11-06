@@ -4,7 +4,6 @@ import {
   Alert,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
   useColorScheme,
 } from 'react-native';
@@ -14,6 +13,7 @@ import {SwipeCard} from '../components/SwipeCard';
 import {VideoCard} from '../components/VideoCard';
 import {MediaCard} from '../components/MediaCard';
 import {StorageBar} from '../components/StorageBar';
+import {ReviewHeader} from '../components/ReviewHeader';
 
 const BATCH_WARNING_THRESHOLD = 1024;
 
@@ -34,6 +34,7 @@ export function VideosScreen() {
     flushDeletes,
     videoUndoStack,
     videoPendingCount,
+    videoReviewStats,
   } = useQueueStore();
 
   const {videoSort, videoFilters, dateFilter} = useSettingsStore();
@@ -65,7 +66,6 @@ export function VideosScreen() {
 
   const currentAsset = videoQueue[videoIndex];
   const nextAsset = videoQueue[videoIndex + 1] || null;
-  const remaining = videoQueue.length - videoIndex;
   const canUndo = videoUndoStack.length > 0;
 
   const handleSwipeLeft = useCallback(() => {
@@ -87,7 +87,11 @@ export function VideosScreen() {
         'You may want to delete your videos in smaller batches to avoid system timeouts.',
         [
           {text: 'Cancel', style: 'cancel'},
-          {text: 'Delete anyway', style: 'destructive', onPress: () => flushDeletes('video')},
+          {
+            text: 'Delete anyway',
+            style: 'destructive',
+            onPress: () => flushDeletes('video'),
+          },
         ],
       );
     } else {
@@ -119,29 +123,22 @@ export function VideosScreen() {
     }
 
     return (
-      <View style={[styles.center, isDark && styles.bgDark]}>
-        <Text style={[styles.emptyTitle, isDark && styles.textDark]}>
-          All caught up!
-        </Text>
-        <Text style={[styles.emptySubtitle, isDark && styles.textSecondary]}>
-          No more videos to review.
-        </Text>
-        <View style={styles.emptyActions}>
-          {canUndo && (
-            <TouchableOpacity onPress={handleUndo} style={styles.undoButton}>
-              <Text style={styles.undoText}>Undo</Text>
-            </TouchableOpacity>
-          )}
-          {videoPendingCount > 0 && (
-            <TouchableOpacity onPress={handleDelete} style={styles.deleteButtonLarge}>
-              {videoPendingCount >= BATCH_WARNING_THRESHOLD && (
-                <Text style={styles.warningIcon}>⚠️ </Text>
-              )}
-              <Text style={styles.deleteButtonLargeText}>
-                Delete {videoPendingCount}
-              </Text>
-            </TouchableOpacity>
-          )}
+      <View style={[styles.container, isDark && styles.bgDark]}>
+        <ReviewHeader
+          stats={videoReviewStats}
+          canUndo={canUndo}
+          pendingCount={videoPendingCount}
+          batchWarningThreshold={BATCH_WARNING_THRESHOLD}
+          onUndo={handleUndo}
+          onDelete={handleDelete}
+        />
+        <View style={styles.centerFill}>
+          <Text style={[styles.emptyTitle, isDark && styles.textDark]}>
+            All caught up!
+          </Text>
+          <Text style={[styles.emptySubtitle, isDark && styles.textSecondary]}>
+            No more videos to review.
+          </Text>
         </View>
         <StorageBar />
       </View>
@@ -150,28 +147,14 @@ export function VideosScreen() {
 
   return (
     <View style={[styles.container, isDark && styles.bgDark]}>
-      <View style={styles.header}>
-        <Text style={[styles.counter, isDark && styles.textDark]}>
-          {remaining} remaining
-        </Text>
-        <View style={styles.headerButtons}>
-          {canUndo && (
-            <TouchableOpacity onPress={handleUndo} style={styles.undoButton}>
-              <Text style={styles.undoText}>Undo</Text>
-            </TouchableOpacity>
-          )}
-          {videoPendingCount > 0 && (
-            <TouchableOpacity onPress={handleDelete} style={styles.deleteButton}>
-              {videoPendingCount >= BATCH_WARNING_THRESHOLD && (
-                <Text style={styles.warningIcon}>⚠️</Text>
-              )}
-              <Text style={styles.deleteText}>
-                Delete {videoPendingCount}
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
+      <ReviewHeader
+        stats={videoReviewStats}
+        canUndo={canUndo}
+        pendingCount={videoPendingCount}
+        batchWarningThreshold={BATCH_WARNING_THRESHOLD}
+        onUndo={handleUndo}
+        onDelete={handleDelete}
+      />
 
       <SwipeCard
         onSwipeLeft={handleSwipeLeft}
@@ -201,78 +184,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     padding: 20,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  centerFill: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  headerButtons: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-  },
-  counter: {
-    fontSize: 14,
-    color: '#666',
-    fontWeight: '500',
+    padding: 20,
   },
   textDark: {
     color: '#fff',
   },
   textSecondary: {
     color: '#8e8e93',
-  },
-  undoButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#007AFF',
-    borderRadius: 14,
-  },
-  undoText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  deleteButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#ff3b30',
-    borderRadius: 14,
-    gap: 4,
-  },
-  deleteText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  emptyActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 20,
-  },
-  deleteButtonLarge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    backgroundColor: '#ff3b30',
-    borderRadius: 10,
-    gap: 4,
-  },
-  deleteButtonLargeText: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  warningIcon: {
-    fontSize: 14,
   },
   loadingText: {
     marginTop: 12,

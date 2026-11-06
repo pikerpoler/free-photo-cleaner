@@ -1,12 +1,9 @@
-import React, {useCallback, useEffect, useState} from 'react';
+import React, {useCallback, useEffect} from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Modal,
-  SafeAreaView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
   useColorScheme,
 } from 'react-native';
@@ -16,14 +13,13 @@ import {useAIStore} from '../stores/aiStore';
 import {SwipeCard} from '../components/SwipeCard';
 import {MediaCard} from '../components/MediaCard';
 import {StorageBar} from '../components/StorageBar';
-import {TrainAIScreen} from './TrainAIScreen';
+import {ReviewHeader} from '../components/ReviewHeader';
 
 const BATCH_WARNING_THRESHOLD = 1024;
 
 export function PhotosScreen() {
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
-  const [showTrainAI, setShowTrainAI] = useState(false);
 
   const {
     photoQueue,
@@ -38,7 +34,7 @@ export function PhotosScreen() {
     flushDeletes,
     photoUndoStack,
     photoPendingCount,
-    photoEligibleCount,
+    photoReviewStats,
   } = useQueueStore();
 
   const {photoSort, photoFilters, dateFilter} = useSettingsStore();
@@ -70,7 +66,6 @@ export function PhotosScreen() {
 
   const currentAsset = photoQueue[photoIndex];
   const nextAsset = photoQueue[photoIndex + 1] || null;
-  const remaining = photoEligibleCount;
   const canUndo = photoUndoStack.length > 0;
   const showScores = photoSort === 'ai';
   const currentId = currentAsset?.id;
@@ -113,26 +108,6 @@ export function PhotosScreen() {
     }
   }, [photoPendingCount, flushDeletes]);
 
-  const trainButton = (
-    <TouchableOpacity
-      onPress={() => setShowTrainAI(true)}
-      style={styles.trainButton}>
-      <Text style={styles.trainText}>Train AI</Text>
-    </TouchableOpacity>
-  );
-
-  const trainModal = (
-    <Modal
-      visible={showTrainAI}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={() => setShowTrainAI(false)}>
-      <SafeAreaView style={[styles.container, isDark && styles.bgDark]}>
-        <TrainAIScreen onClose={() => setShowTrainAI(false)} />
-      </SafeAreaView>
-    </Modal>
-  );
-
   if (isLoadingPhotos) {
     return (
       <View style={[styles.center, isDark && styles.bgDark]}>
@@ -140,7 +115,6 @@ export function PhotosScreen() {
         <Text style={[styles.loadingText, isDark && styles.textDark]}>
           {photoSort === 'ai' ? 'Scoring photos...' : 'Loading photos...'}
         </Text>
-        {trainModal}
       </View>
     );
   }
@@ -153,70 +127,43 @@ export function PhotosScreen() {
           <Text style={[styles.loadingText, isDark && styles.textDark]}>
             Loading more photos...
           </Text>
-          {trainModal}
         </View>
       );
     }
 
     return (
-      <View style={[styles.center, isDark && styles.bgDark]}>
-        <Text style={[styles.emptyTitle, isDark && styles.textDark]}>
-          All caught up!
-        </Text>
-        <Text style={[styles.emptySubtitle, isDark && styles.textSecondary]}>
-          No more photos to review.
-        </Text>
-        <View style={styles.emptyActions}>
-          {canUndo && (
-            <TouchableOpacity onPress={handleUndo} style={styles.undoButton}>
-              <Text style={styles.undoText}>Undo</Text>
-            </TouchableOpacity>
-          )}
-          {photoPendingCount > 0 && (
-            <TouchableOpacity
-              onPress={handleDelete}
-              style={styles.deleteButtonLarge}>
-              {photoPendingCount >= BATCH_WARNING_THRESHOLD && (
-                <Text style={styles.warningIcon}>⚠️ </Text>
-              )}
-              <Text style={styles.deleteButtonLargeText}>
-                Delete {photoPendingCount}
-              </Text>
-            </TouchableOpacity>
-          )}
+      <View style={[styles.container, isDark && styles.bgDark]}>
+        <ReviewHeader
+          stats={photoReviewStats}
+          canUndo={canUndo}
+          pendingCount={photoPendingCount}
+          batchWarningThreshold={BATCH_WARNING_THRESHOLD}
+          onUndo={handleUndo}
+          onDelete={handleDelete}
+        />
+        <View style={styles.centerFill}>
+          <Text style={[styles.emptyTitle, isDark && styles.textDark]}>
+            All caught up!
+          </Text>
+          <Text style={[styles.emptySubtitle, isDark && styles.textSecondary]}>
+            No more photos to review.
+          </Text>
         </View>
-        {trainButton}
         <StorageBar />
-        {trainModal}
       </View>
     );
   }
 
   return (
     <View style={[styles.container, isDark && styles.bgDark]}>
-      <View style={styles.header}>
-        <Text style={[styles.counter, isDark && styles.textDark]}>
-          {remaining} remaining
-        </Text>
-        <View style={styles.headerButtons}>
-          {trainButton}
-          {canUndo && (
-            <TouchableOpacity onPress={handleUndo} style={styles.undoButton}>
-              <Text style={styles.undoText}>Undo</Text>
-            </TouchableOpacity>
-          )}
-          {photoPendingCount > 0 && (
-            <TouchableOpacity onPress={handleDelete} style={styles.deleteButton}>
-              {photoPendingCount >= BATCH_WARNING_THRESHOLD && (
-                <Text style={styles.warningIcon}>⚠️</Text>
-              )}
-              <Text style={styles.deleteText}>
-                Delete {photoPendingCount}
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
+      <ReviewHeader
+        stats={photoReviewStats}
+        canUndo={canUndo}
+        pendingCount={photoPendingCount}
+        batchWarningThreshold={BATCH_WARNING_THRESHOLD}
+        onUndo={handleUndo}
+        onDelete={handleDelete}
+      />
 
       <SwipeCard
         onSwipeLeft={handleSwipeLeft}
@@ -239,7 +186,6 @@ export function PhotosScreen() {
       </SwipeCard>
 
       <StorageBar />
-      {trainModal}
     </View>
   );
 }
@@ -259,89 +205,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     padding: 20,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  centerFill: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  headerButtons: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-  },
-  counter: {
-    fontSize: 14,
-    color: '#666',
-    fontWeight: '500',
+    padding: 20,
   },
   textDark: {
     color: '#fff',
   },
   textSecondary: {
     color: '#8e8e93',
-  },
-  trainButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#5856D6',
-    borderRadius: 14,
-  },
-  trainText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  undoButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#007AFF',
-    borderRadius: 14,
-  },
-  undoText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  deleteButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#ff3b30',
-    borderRadius: 14,
-    gap: 4,
-  },
-  deleteText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  emptyActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 20,
-  },
-  deleteButtonLarge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    backgroundColor: '#ff3b30',
-    borderRadius: 10,
-    gap: 4,
-  },
-  deleteButtonLargeText: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  warningIcon: {
-    fontSize: 14,
   },
   loadingText: {
     marginTop: 12,

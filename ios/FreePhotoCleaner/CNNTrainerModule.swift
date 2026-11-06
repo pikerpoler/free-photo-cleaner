@@ -145,13 +145,16 @@ class CNNTrainerModule: RCTEventEmitter {
       var rows: [[Float]] = []
       var y: [Float] = []
       let count = min(uris.count, labels.count)
-      let alreadyTrained = self.bank.hasModel(modelId)
+      var unreadable = 0
 
       for idx in 0..<count {
         if self.stopRequested { break }
         let uri = uris[idx]
         let label = Float(truncating: labels[idx])
-        guard let localId = PhotoFeatures.localIdentifier(from: uri) else { continue }
+        guard let localId = PhotoFeatures.localIdentifier(from: uri) else {
+          unreadable += 1
+          continue
+        }
         if self.bank.isIncorporated(localId, modelId: modelId) { continue }
 
         self.emit("trainingProgress", body: [
@@ -161,28 +164,47 @@ class CNNTrainerModule: RCTEventEmitter {
           "done": false,
         ])
 
-        guard let vec = self.extractor.extractVector(uri: uri) else { continue }
+        guard let vec = self.extractor.extractVector(uri: uri) else {
+          unreadable += 1
+          continue
+        }
         sampleIds.append(localId)
         rows.append(vec)
         y.append(label)
       }
 
       if rows.isEmpty {
-        self.fail(
-          reject,
-          "NO_NEW",
-          "This model already includes every labeled photo. Training only adds photos it has not seen. Delete the model at the bottom of this screen to train it from scratch."
-        )
+        if unreadable > 0 {
+          self.fail(
+            reject,
+            "TOO_FEW",
+            "Each training session needs at least 20 new photos this model has not learned yet, including at least 2 kept and 2 marked for deletion."
+          )
+        } else {
+          self.fail(
+            reject,
+            "NO_NEW",
+            "This model already includes every labeled photo. Training only adds photos it has not seen. Delete the model at the bottom of this screen to train it from scratch."
+          )
+        }
         return
       }
-      if !alreadyTrained && rows.count < 20 {
-        self.fail(reject, "TOO_FEW", "Need at least 20 labeled photos to start this model")
+      if rows.count < 20 {
+        self.fail(
+          reject,
+          "TOO_FEW",
+          "Each training session needs at least 20 new photos this model has not learned yet, including at least 2 kept and 2 marked for deletion."
+        )
         return
       }
       let nKeep = y.filter { $0 < 0.5 }.count
       let nDel = y.count - nKeep
-      if !alreadyTrained && (nKeep < 2 || nDel < 2) {
-        self.fail(reject, "TOO_FEW", "Need at least 2 keeps and 2 deletes to start this model")
+      if nKeep < 2 || nDel < 2 {
+        self.fail(
+          reject,
+          "TOO_FEW",
+          "Each training session needs at least 20 new photos this model has not learned yet, including at least 2 kept and 2 marked for deletion."
+        )
         return
       }
 
@@ -229,6 +251,7 @@ class CNNTrainerModule: RCTEventEmitter {
         "cancelled": self.stopRequested,
         "trainSize": rows.count,
         "testSize": 0,
+        "skippedUnreadable": unreadable,
         "modelId": modelId,
         "trainResize": 0,
       ]

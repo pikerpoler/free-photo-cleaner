@@ -13,7 +13,7 @@ export const TRAINABLE_MODELS: {id: TrainableModelId; label: string}[] = [
   {id: 'mlp-big', label: 'big MLP'},
 ];
 
-export const DEFAULT_TRAINABLE_MODEL: TrainableModelId = 'logistic-l2';
+export const DEFAULT_TRAINABLE_MODEL: TrainableModelId = 'catboost';
 export const MIN_LABELED_FOR_TRAIN = 20;
 export const FEATURE_DIM = 53;
 
@@ -132,6 +132,8 @@ export interface TrainingResult {
   cancelled: boolean;
   trainSize: number;
   testSize: number;
+  /** Labeled photos skipped because they could not be read. */
+  skippedUnreadable?: number;
   modelId: string;
   trainResize: number;
 }

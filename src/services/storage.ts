@@ -36,6 +36,10 @@ const KEYS = {
   SWIPE_DECISIONS_BACKFILL_DONE: 'migrate.swipeDecisionsBackfillDone',
 } as const;
 
+export function aiTrainingHistoryKey(modelId: string): string {
+  return `ai.trainingHistory.${modelId}`;
+}
+
 export function getSetting<T>(key: string, defaultValue: T): T {
   const raw = storage.getString(key);
   if (raw === undefined) return defaultValue;

@@ -27,10 +27,21 @@ import {
   getCatalogAssets,
   pruneCatalogToIds,
   getPersistedUndoStack,
+  getPendingDeleteAggregate,
+  getKeptAggregate,
 } from '../services/database';
 import {useAIStore} from './aiStore';
 
 type UndoEntry = {type: 'keep' | 'delete'; asset: MediaAsset; queue: MediaType};
+
+export type ReviewAggregateStats = {
+  toReviewCount: number;
+  toReviewBytes: number;
+  pendingDeleteCount: number;
+  pendingDeleteBytes: number;
+  keptCount: number;
+  keptBytes: number;
+};
 
 interface QueueState {
   photoQueue: MediaAsset[];
@@ -45,6 +56,8 @@ interface QueueState {
   videoPendingCount: number;
   /** Photos still in the library that pass the current filters. */
   photoEligibleCount: number;
+  photoReviewStats: ReviewAggregateStats;
+  videoReviewStats: ReviewAggregateStats;
   photoUndoStack: UndoEntry[];
   videoUndoStack: UndoEntry[];
 
@@ -167,14 +180,75 @@ function filterEligible(
   return assets;
 }
 
-function countPhotoEligible(): number {
-  return filterEligible(
+function sumFileSizes(assets: MediaAsset[]): number {
+  return assets.reduce((sum, a) => sum + a.fileSize, 0);
+}
+
+function getPhotoToReviewStats(): {count: number; totalBytes: number} {
+  const eligible = filterEligible(
     photoRawCache,
     'photo',
     currentPhotoFilters,
     undefined,
     currentDateFilter,
-  ).length;
+  );
+  return {
+    count: eligible.length,
+    totalBytes: sumFileSizes(eligible),
+  };
+}
+
+function getVideoToReviewStats(): {count: number; totalBytes: number} {
+  const eligible = filterEligible(
+    videoRawCache,
+    'video',
+    undefined,
+    currentVideoFilters,
+    currentDateFilter,
+  );
+  return {
+    count: eligible.length,
+    totalBytes: sumFileSizes(eligible),
+  };
+}
+
+function buildReviewAggregates(): {
+  photoEligibleCount: number;
+  photoReviewStats: ReviewAggregateStats;
+  videoReviewStats: ReviewAggregateStats;
+} {
+  const photoTR = getPhotoToReviewStats();
+  const videoTR = getVideoToReviewStats();
+  const photoPend = getPendingDeleteAggregate('photo');
+  const videoPend = getPendingDeleteAggregate('video');
+  const photoKept = getKeptAggregate('photo');
+  const videoKept = getKeptAggregate('video');
+  return {
+    photoEligibleCount: photoTR.count,
+    photoReviewStats: {
+      toReviewCount: photoTR.count,
+      toReviewBytes: photoTR.totalBytes,
+      pendingDeleteCount: photoPend.count,
+      pendingDeleteBytes: photoPend.totalBytes,
+      keptCount: photoKept.count,
+      keptBytes: photoKept.totalBytes,
+    },
+    videoReviewStats: {
+      toReviewCount: videoTR.count,
+      toReviewBytes: videoTR.totalBytes,
+      pendingDeleteCount: videoPend.count,
+      pendingDeleteBytes: videoPend.totalBytes,
+      keptCount: videoKept.count,
+      keptBytes: videoKept.totalBytes,
+    },
+  };
+}
+
+function reviewStatsPartial(): Pick<
+  QueueState,
+  'photoEligibleCount' | 'photoReviewStats' | 'videoReviewStats'
+> {
+  return buildReviewAggregates();
 }
 
 function buildScoredRemainder(
@@ -301,15 +375,15 @@ async function ensureAIQueueFilled(
       set({
         photoQueue: built.queue,
         photoIndex: built.index,
-        photoEligibleCount: built.eligibleCount,
         isLoadingPhotos:
           built.queue.length === 0 &&
           (stillNeedScores || photoRawCache.length === 0),
+        ...reviewStatsPartial(),
       });
 
       if (!stillNeedScores) {
         if (built.queue.length > 0 || built.unscoredCount === 0) {
-          set({isLoadingPhotos: false});
+          set({isLoadingPhotos: false, ...reviewStatsPartial()});
         }
         break;
       }
@@ -324,7 +398,7 @@ async function ensureAIQueueFilled(
       );
       const unscored = eligible.filter(a => scoreById[a.id] === undefined);
       if (unscored.length === 0) {
-        set({isLoadingPhotos: false});
+        set({isLoadingPhotos: false, ...reviewStatsPartial()});
         break;
       }
 
@@ -426,6 +500,8 @@ function catalogDateBounds(dateFilter?: DateFilter): {
   return {from: startOfFrom.getTime(), to: endOfTo.getTime()};
 }
 
+const initialReview = buildReviewAggregates();
+
 export const useQueueStore = create<QueueState>((set, get) => ({
   photoQueue: [],
   videoQueue: [],
@@ -437,7 +513,9 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   isLoadingVideosMore: false,
   photoPendingCount: getPendingDeletesByType('photo').length,
   videoPendingCount: getPendingDeletesByType('video').length,
-  photoEligibleCount: 0,
+  photoEligibleCount: initialReview.photoEligibleCount,
+  photoReviewStats: initialReview.photoReviewStats,
+  videoReviewStats: initialReview.videoReviewStats,
   photoUndoStack: getPersistedUndoStack('photo') as UndoEntry[],
   videoUndoStack: getPersistedUndoStack('video') as UndoEntry[],
 
@@ -483,9 +561,9 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         set({
           photoQueue: [],
           photoIndex: 0,
-          photoEligibleCount: countPhotoEligible(),
           isLoadingPhotos: true,
           isLoadingPhotosMore: true,
+          ...reviewStatsPartial(),
         });
         void ensureAIQueueFilled(set, get);
       } else {
@@ -502,7 +580,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           [indexKey]: 0,
           [loadingKey]: false,
           [loadingMoreKey]: true,
-          ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
+          ...reviewStatsPartial(),
         });
       }
     } else {
@@ -511,7 +589,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         [indexKey]: 0,
         [loadingKey]: true,
         [loadingMoreKey]: false,
-        ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
+        ...reviewStatsPartial(),
       });
     }
 
@@ -547,12 +625,12 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             }
             set({
               isLoadingPhotosMore: false,
-              photoEligibleCount: countPhotoEligible(),
+              ...reviewStatsPartial(),
             });
           } else {
             set({
               isLoadingPhotosMore: true,
-              photoEligibleCount: countPhotoEligible(),
+              ...reviewStatsPartial(),
             });
           }
           void ensureAIQueueFilled(set, get);
@@ -574,7 +652,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             [indexKey]: 0,
             [loadingKey]: false,
             [loadingMoreKey]: !done,
-            ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
+            ...reviewStatsPartial(),
           });
         } else if (done) {
           // Full library sync without date filter on CameraRoll when catalog warm
@@ -607,7 +685,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             [queueKey]: [...frozenPrefix, ...remainder],
             [loadingMoreKey]: false,
             [loadingKey]: false,
-            ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
+            ...reviewStatsPartial(),
           });
         } else {
           // Intermediate: update remaining without resetting index
@@ -631,7 +709,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             [queueKey]: [...frozenPrefix, ...remainder],
             [loadingMoreKey]: true,
             [loadingKey]: false,
-            ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
+            ...reviewStatsPartial(),
           });
         }
       },
@@ -664,8 +742,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       set({
         photoQueue: [],
         photoIndex: 0,
-        photoEligibleCount: countPhotoEligible(),
         isLoadingPhotos: true,
+        ...reviewStatsPartial(),
       });
       void ensureAIQueueFilled(set, get);
       return;
@@ -686,7 +764,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       [queueKey]: queue,
       [indexKey]: 0,
       isLoadingPhotos: false,
-      ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
+      ...reviewStatsPartial(),
     });
   },
 
@@ -719,7 +797,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       [indexKey]: index + 1,
       [countKey]: currentCount + 1,
       [stackKey]: [...currentStack, {type: 'delete', asset, queue: type}],
-      ...(type === 'photo' ? {photoEligibleCount: countPhotoEligible()} : {}),
+      ...reviewStatsPartial(),
     });
 
     if (type === 'photo') {
@@ -745,7 +823,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     set({
       [indexKey]: index + 1,
       [stackKey]: [...currentStack, {type: 'keep', asset, queue: type}],
-      ...(type === 'photo' ? {photoEligibleCount: countPhotoEligible()} : {}),
+      ...reviewStatsPartial(),
     });
 
     if (type === 'photo') {
@@ -766,25 +844,35 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
     const uris = pending.map(p => p.uri);
 
+    const countKey =
+      type === 'photo' ? 'photoPendingCount' : 'videoPendingCount';
+    const stackKey = type === 'photo' ? 'photoUndoStack' : 'videoUndoStack';
+
     if (Platform.OS === 'ios') {
       const result = await batchDeleteAssets(uris);
       if (result.success) {
         clearPendingDeletesByType(type);
-        const countKey =
-          type === 'photo' ? 'photoPendingCount' : 'videoPendingCount';
-        const stackKey =
-          type === 'photo' ? 'photoUndoStack' : 'videoUndoStack';
-        set({[countKey]: 0, [stackKey]: []});
+        set({
+          [countKey]: 0,
+          [stackKey]: [],
+          ...reviewStatsPartial(),
+        });
+      } else {
+        set({
+          [countKey]: getPendingDeletesByType(type).length,
+          ...reviewStatsPartial(),
+        });
       }
     } else {
       for (const uri of uris) {
         await deleteAsset(uri);
       }
       clearPendingDeletesByType(type);
-      const countKey =
-        type === 'photo' ? 'photoPendingCount' : 'videoPendingCount';
-      const stackKey = type === 'photo' ? 'photoUndoStack' : 'videoUndoStack';
-      set({[countKey]: 0, [stackKey]: []});
+      set({
+        [countKey]: 0,
+        [stackKey]: [],
+        ...reviewStatsPartial(),
+      });
     }
   },
 
@@ -819,7 +907,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       ...(lastEntry.type === 'delete'
         ? {[countKey]: Math.max(0, currentCount - 1)}
         : {}),
-      ...(isPhoto ? {photoEligibleCount: countPhotoEligible()} : {}),
+      ...reviewStatsPartial(),
     });
   },
 
@@ -845,8 +933,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       set({
         photoQueue: [],
         photoIndex: 0,
-        photoEligibleCount: countPhotoEligible(),
         isLoadingPhotos: true,
+        ...reviewStatsPartial(),
       });
       await ensureAIQueueFilled(set, get);
       return;
@@ -863,7 +951,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     set({
       photoQueue: queue,
       photoIndex: 0,
-      photoEligibleCount: countPhotoEligible(),
+      ...reviewStatsPartial(),
     });
   },
 
@@ -871,6 +959,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     set({
       photoUndoStack: getPersistedUndoStack('photo') as UndoEntry[],
       videoUndoStack: getPersistedUndoStack('video') as UndoEntry[],
+      ...reviewStatsPartial(),
     });
   },
 }));

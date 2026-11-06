@@ -4,6 +4,7 @@ import {NavigationContainer, DefaultTheme, DarkTheme} from '@react-navigation/na
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import {PhotosScreen} from '../screens/PhotosScreen';
 import {VideosScreen} from '../screens/VideosScreen';
+import {TrainAIScreen} from '../screens/TrainAIScreen';
 import {SettingsScreen} from '../screens/SettingsScreen';
 
 const Tab = createBottomTabNavigator();
@@ -32,6 +33,15 @@ export function AppNavigator() {
           component={VideosScreen}
           options={{
             tabBarLabel: 'Videos',
+            tabBarIcon: () => null,
+          }}
+        />
+        <Tab.Screen
+          name="TrainAI"
+          component={TrainAIScreen}
+          options={{
+            tabBarLabel: 'Train AI',
+            headerTitle: 'Train AI',
             tabBarIcon: () => null,
           }}
         />
