@@ -656,6 +656,7 @@ final class FeatureModelBank {
   private var activeURL: URL { modelsDir.appendingPathComponent("active_model_id.txt") }
 
   init() {
+    PhotoFeatures.purgeLegacyFeatureCacheVersions(keeping: FeatureSchema.version)
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     let dir = docs.appendingPathComponent("ai_feature_models/v\(FeatureSchema.version)", isDirectory: true)
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

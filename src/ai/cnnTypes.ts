@@ -16,6 +16,18 @@ export const TRAINABLE_MODELS: {id: TrainableModelId; label: string}[] = [
 export const DEFAULT_TRAINABLE_MODEL: TrainableModelId = 'catboost';
 export const MIN_LABELED_FOR_TRAIN = 20;
 export const FEATURE_DIM = 53;
+/** Bump in Swift `FeatureSchema.version` — JS can show retrain messaging. */
+export const FEATURE_SCHEMA_VERSION = 3;
+
+export type YOLOStatus = 'missing' | 'loaded' | 'failed';
+
+export interface YOLODetectorStatus {
+  status: YOLOStatus;
+  loadError: string;
+  lastRunError: string;
+  featureSchemaVersion: number;
+  expectedAnchors: number;
+}
 
 export function isMlpModel(id: string): boolean {
   return id === 'mlp-small' || id === 'mlp-big';
@@ -160,6 +172,6 @@ export interface LabeledSample {
   label: 0 | 1;
 }
 
-export function clampTrainResize(n: number): TrainResize {
+export function clampTrainResize(_n: number): TrainResize {
   return 64;
 }

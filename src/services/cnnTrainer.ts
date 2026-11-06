@@ -5,6 +5,7 @@ import {
   TrainingConfig,
   TrainingProgress,
   TrainingResult,
+  YOLODetectorStatus,
 } from '../ai/cnnTypes';
 
 const {CNNTrainerModule} = NativeModules;
@@ -107,6 +108,35 @@ export async function predictScores(uris: string[]): Promise<number[]> {
     return scores as number[];
   } catch {
     return uris.map(() => 0.5);
+  }
+}
+
+export async function getYOLOStatus(): Promise<YOLODetectorStatus | null> {
+  if (!(await isTrainerAvailable())) return null;
+  try {
+    const s = await CNNTrainerModule.getYOLOStatus();
+    if (!s || typeof s !== 'object') return null;
+    return s as YOLODetectorStatus;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteCachedFeatures(uris: string[]): Promise<void> {
+  if (!(await isTrainerAvailable())) return;
+  try {
+    await CNNTrainerModule.deleteCachedFeatures(uris);
+  } catch {
+    // best-effort
+  }
+}
+
+export async function pruneFeatureCacheFromUris(uris: string[]): Promise<void> {
+  if (!(await isTrainerAvailable())) return;
+  try {
+    await CNNTrainerModule.pruneFeatureCache(uris);
+  } catch {
+    // best-effort
   }
 }
 

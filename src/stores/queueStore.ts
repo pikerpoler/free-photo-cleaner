@@ -31,6 +31,7 @@ import {
   getKeptAggregate,
 } from '../services/database';
 import {useAIStore} from './aiStore';
+import {deleteCachedFeatures, pruneFeatureCacheFromUris} from '../services/cnnTrainer';
 
 type UndoEntry = {type: 'keep' | 'delete'; asset: MediaAsset; queue: MediaType};
 
@@ -422,7 +423,7 @@ function maybeRefillAIQueue(
   const state = get();
   const remaining = state.photoQueue.length - state.photoIndex;
   if (remaining < AI_REFILL_THRESHOLD) {
-    void ensureAIQueueFilled(set, get);
+    void ensureAIQueueFilled(set, get); // eslint-disable-line no-void
   }
 }
 
@@ -565,7 +566,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           isLoadingPhotosMore: true,
           ...reviewStatsPartial(),
         });
-        void ensureAIQueueFilled(set, get);
+        void ensureAIQueueFilled(set, get); // eslint-disable-line no-void
       } else {
         const queue = filterAndSort(
           catalog,
@@ -621,6 +622,9 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           if (done) {
             if (!currentDateFilter?.enabled) {
               pruneCatalogToIds(type, seenIds);
+              if (type === 'photo') {
+                pruneFeatureCacheFromUris(Array.from(seenIds)).catch(() => {});
+              }
               photoRawCache = getCatalogAssets(type);
             }
             set({
@@ -633,7 +637,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
               ...reviewStatsPartial(),
             });
           }
-          void ensureAIQueueFilled(set, get);
+          void ensureAIQueueFilled(set, get); // eslint-disable-line no-void
           return;
         }
 
@@ -659,6 +663,9 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           // — still prune using all seen IDs from this sync pass
           if (!currentDateFilter?.enabled) {
             pruneCatalogToIds(type, seenIds);
+            if (type === 'photo') {
+              pruneFeatureCacheFromUris(Array.from(seenIds)).catch(() => {});
+            }
             const refreshed = getCatalogAssets(type);
             if (isPhoto) {
               photoRawCache = refreshed;
@@ -745,7 +752,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         isLoadingPhotos: true,
         ...reviewStatsPartial(),
       });
-      void ensureAIQueueFilled(set, get);
+      void ensureAIQueueFilled(set, get); // eslint-disable-line no-void
       return;
     }
 
@@ -851,6 +858,9 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (Platform.OS === 'ios') {
       const result = await batchDeleteAssets(uris);
       if (result.success) {
+        if (type === 'photo') {
+          deleteCachedFeatures(uris).catch(() => {});
+        }
         clearPendingDeletesByType(type);
         set({
           [countKey]: 0,
@@ -864,15 +874,28 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         });
       }
     } else {
+      const deletedUris: string[] = [];
       for (const uri of uris) {
-        await deleteAsset(uri);
+        if (await deleteAsset(uri)) {
+          deletedUris.push(uri);
+        }
       }
-      clearPendingDeletesByType(type);
-      set({
-        [countKey]: 0,
-        [stackKey]: [],
-        ...reviewStatsPartial(),
-      });
+      if (type === 'photo' && deletedUris.length > 0) {
+        deleteCachedFeatures(deletedUris).catch(() => {});
+      }
+      if (deletedUris.length === uris.length) {
+        clearPendingDeletesByType(type);
+        set({
+          [countKey]: 0,
+          [stackKey]: [],
+          ...reviewStatsPartial(),
+        });
+      } else {
+        set({
+          [countKey]: getPendingDeletesByType(type).length,
+          ...reviewStatsPartial(),
+        });
+      }
     }
   },
 

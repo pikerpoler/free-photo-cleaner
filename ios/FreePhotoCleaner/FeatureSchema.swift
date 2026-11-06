@@ -1,28 +1,38 @@
 import Foundation
 
 enum FeatureSchema {
-  static let version = 1
-  static let dim = 53
+  /// Bump when feature extraction changes (e.g. real YOLO vs zero-filled YOLO slots).
+  static let version = 3
+  static let dim = 57
+
+  /// TEMP (debugging YOLO): when false, features are always re-extracted and never read from or written to disk.
+  static let featureCacheEnabled = true
 
   static let photometricCount = 16
   static let geometryCount = 6
-  static let categoryCount = 11
+  static let categoryCount = 13
   static let visionCount = 6
   static let metaCount = 3
 
+  /// Minimum obj * class_conf to keep a detection (matches export script CONF_THRE).
   static let confThreshold: Float = 0.25
   static let maxBoxes = 50
+  /// IoU threshold for class-aware NMS in Swift (matches export / YOLOX default ~0.45).
+  static let yoloNmsThreshold: Float = 0.45
   static let faceConfThreshold: Float = 0.5
   static let decodeLongEdge = 640
   static let photometricLongEdge = 160
   static let yoloLetterbox = 416
+  /// YOLOX-Nano FPN strides at 416×416 → 52×52 + 26×26 + 13×13 anchors.
+  static let yoloStrides: [Int] = [8, 16, 32]
 
   static let categoryNames: [String] = [
-    "person", "vehicle", "outdoor", "animal", "accessory", "sports",
+    "person", "vehicle", "outdoor", "other_animal", "accessory", "sports",
     "kitchen", "furniture", "electronic", "appliance", "indoor",
+    "dog", "cat",
   ]
 
-  /// COCO class index (0..79) -> category index (0..10), or -1 if unmapped.
+  /// COCO class index (0..79) -> category index (0..12), or -1 if unmapped.
   static let cocoToCategory: [Int16] = {
     var map = [Int16](repeating: -1, count: 80)
     func set(_ classes: [Int], _ cat: Int) {
@@ -31,7 +41,7 @@ enum FeatureSchema {
     set([0], 0)
     set([1, 2, 3, 4, 5, 6, 7, 8], 1)
     set([9, 10, 11, 12, 13], 2)
-    set([14, 15, 16, 17, 18, 19, 20, 21, 22, 23], 3)
+    set([14, 17, 18, 19, 20, 21, 22, 23], 3)
     set([24, 25, 26, 27, 28], 4)
     set([29, 30, 31, 32, 33, 34, 35, 36, 37, 38], 5)
     set([39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55], 6)
@@ -39,6 +49,8 @@ enum FeatureSchema {
     set([62, 63, 64, 65, 66, 67], 8)
     set([68, 69, 70, 71, 72, 78], 9)
     set([58, 60, 61, 73, 74, 75, 76, 77, 79], 10)
+    set([16], 11)
+    set([15], 12)
     return map
   }()
 

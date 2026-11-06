@@ -21,6 +21,7 @@
 		C1D2E3F31234567800FEAT /* YOLODetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2A3B31234567800FEAT /* YOLODetector.swift */; };
 		C1D2E3F41234567800FEAT /* ScoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2A3B41234567800FEAT /* ScoreModels.swift */; };
 		C1D2E3F51234567800FEAT /* ScoreModels+MLP.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2A3B51234567800FEAT /* ScoreModels+MLP.swift */; };
+		D4E5F6012345678900YOLO /* YOLOXNano.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F6022345678900YOLO /* YOLOXNano.mlpackage */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -44,6 +45,7 @@
 		F1E2A3B31234567800FEAT /* YOLODetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YOLODetector.swift; path = FreePhotoCleaner/YOLODetector.swift; sourceTree = "<group>"; };
 		F1E2A3B41234567800FEAT /* ScoreModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScoreModels.swift; path = FreePhotoCleaner/ScoreModels.swift; sourceTree = "<group>"; };
 		F1E2A3B51234567800FEAT /* ScoreModels+MLP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "ScoreModels+MLP.swift"; path = "FreePhotoCleaner/ScoreModels+MLP.swift"; sourceTree = "<group>"; };
+		D4E5F6022345678900YOLO /* YOLOXNano.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; name = YOLOXNano.mlpackage; path = FreePhotoCleaner/Models/YOLOXNano.mlpackage; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -72,6 +74,7 @@
 				F1E2A3B31234567800FEAT /* YOLODetector.swift */,
 				F1E2A3B41234567800FEAT /* ScoreModels.swift */,
 				F1E2A3B51234567800FEAT /* ScoreModels+MLP.swift */,
+				D4E5F6022345678900YOLO /* YOLOXNano.mlpackage */,
 				A1B2C3D61234567800FACADE /* FreePhotoCleaner-Bridging-Header.h */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
@@ -283,6 +286,7 @@
 				C1D2E3F11234567800FEAT /* FeatureSchema.swift in Sources */,
 				C1D2E3F21234567800FEAT /* PhotoFeatures.swift in Sources */,
 				C1D2E3F31234567800FEAT /* YOLODetector.swift in Sources */,
+				D4E5F6012345678900YOLO /* YOLOXNano.mlpackage in Sources */,
 				C1D2E3F41234567800FEAT /* ScoreModels.swift in Sources */,
 				C1D2E3F51234567800FEAT /* ScoreModels+MLP.swift in Sources */,
 			);

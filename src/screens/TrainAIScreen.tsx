@@ -19,12 +19,14 @@ import {getLabeledPhotoSamples} from '../services/database';
 import {
   deleteModel,
   getModelStatus,
+  getYOLOStatus,
   isTrainerAvailable,
   startTraining,
   stopTraining,
   subscribeTrainingProgress,
 } from '../services/cnnTrainer';
 import {
+  FEATURE_SCHEMA_VERSION,
   isMlpModel,
   LR_SCHEDULERS,
   LrSchedulerId,
@@ -32,6 +34,7 @@ import {
   TRAINABLE_MODELS,
   TrainableModelId,
   TrainingProgress,
+  YOLODetectorStatus,
 } from '../ai/cnnTypes';
 import {
   formatMlpLearningRate,
@@ -182,6 +185,7 @@ export function TrainAIScreen() {
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [statusText, setStatusText] = useState('');
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
+  const [yoloStatus, setYoloStatus] = useState<YOLODetectorStatus | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selectedModel, setSelectedModel] = useState<TrainableModelId>(aiModel);
   const [trainBlocked, setTrainBlocked] = useState(false);
@@ -206,6 +210,24 @@ export function TrainAIScreen() {
 
   const canTrain = available && !isTraining && !trainBlocked && meetsRules;
 
+  const yoloDegraded =
+    available &&
+    Platform.OS === 'ios' &&
+    yoloStatus != null &&
+    yoloStatus.status !== 'loaded';
+
+  const yoloRunWarn =
+    available &&
+    Platform.OS === 'ios' &&
+    yoloStatus?.status === 'loaded' &&
+    (yoloStatus.lastRunError?.length ?? 0) > 0;
+
+  const needsRetrainAfterSchemaBump =
+    hasModel &&
+    activeModelInfo != null &&
+    (activeModelInfo.featureSchemaVersion == null ||
+      activeModelInfo.featureSchemaVersion < FEATURE_SCHEMA_VERSION);
+
   const blockMessage =
     !available || isTraining || canTrain
       ? ''
@@ -218,6 +240,10 @@ export function TrainAIScreen() {
   const reloadStatus = useCallback(() => {
     getModelStatus(selectedModel).then(setModelStatus);
   }, [selectedModel]);
+
+  const reloadYoloStatus = useCallback(() => {
+    getYOLOStatus().then(setYoloStatus);
+  }, []);
 
   const reloadCounts = useCallback(() => {
     const samples = getLabeledPhotoSamples();
@@ -236,8 +262,13 @@ export function TrainAIScreen() {
 
   useEffect(() => {
     reloadCounts();
-    isTrainerAvailable().then(setAvailable);
-  }, [reloadCounts]);
+    isTrainerAvailable().then(avail => {
+      setAvailable(avail);
+      if (avail) {
+        reloadYoloStatus();
+      }
+    });
+  }, [reloadCounts, reloadYoloStatus]);
 
   useFocusEffect(
     useCallback(() => {
@@ -245,6 +276,7 @@ export function TrainAIScreen() {
       refreshModelStatus().catch(() => {});
       reloadCounts();
       reloadStatus();
+      reloadYoloStatus();
       return () => {
         const target = selectedModelRef.current;
         const state = useAIStore.getState();
@@ -271,6 +303,7 @@ export function TrainAIScreen() {
       refreshModelStatus,
       reloadStatus,
       reloadCounts,
+      reloadYoloStatus,
       selectSortModel,
       setAISortModel,
       setAIModel,
@@ -469,6 +502,31 @@ export function TrainAIScreen() {
       {!available && (
         <Text style={styles.warn}>
           On-device feature training is available on iOS only.
+        </Text>
+      )}
+
+      {needsRetrainAfterSchemaBump && (
+        <Text style={styles.warn}>
+          Feature extraction was upgraded (v{FEATURE_SCHEMA_VERSION}). Retrain your
+          model so scores use the new object-detection inputs. Old checkpoints used a
+          previous layout.
+        </Text>
+      )}
+
+      {yoloDegraded && (
+        <Text style={styles.warn}>
+          Object detection unavailable — AI runs without YOLO; scores may be less
+          accurate.
+          {yoloStatus?.loadError
+            ? ` (${yoloStatus.loadError})`
+            : ''}
+        </Text>
+      )}
+
+      {yoloRunWarn && (
+        <Text style={styles.warn}>
+          YOLO model loaded but inference reported an error:{' '}
+          {yoloStatus?.lastRunError}
         </Text>
       )}
 

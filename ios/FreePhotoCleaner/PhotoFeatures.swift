@@ -205,7 +205,7 @@ enum PhotoFeatures {
     return mad
   }
 
-  // MARK: - YOLO aggregation (28 = 6 geom + 22 cat)
+  // MARK: - YOLO aggregation (32 = 6 geom + 26 cat)
 
   static func aggregateDetections(_ boxes: [DetectionBox]) -> [Float] {
     var out = [Float](repeating: 0, count: FeatureSchema.geometryCount + 2 * FeatureSchema.categoryCount)
@@ -308,6 +308,77 @@ enum PhotoFeatures {
     var v = vector
     let data = Data(bytes: &v, count: v.count * 4)
     try? data.write(to: featureCacheDir.appendingPathComponent("\(key).bin"))
+  }
+
+  /// Remove cache files for one asset (all modificationDate variants).
+  static func deleteCachedFeatures(localId: String) {
+    let fm = FileManager.default
+    let safe = localId.replacingOccurrences(of: "/", with: "_")
+    let dir = featureCacheDir
+    guard let urls = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+    let prefix = safe + "_"
+    for fileURL in urls {
+      let name = fileURL.lastPathComponent
+      if name.hasPrefix(prefix), name.hasSuffix(".bin") {
+        try? fm.removeItem(at: fileURL)
+      }
+    }
+  }
+
+  /// `ph://` URIs from RN — removes cached `.bin` for each photo.
+  static func deleteCachedFeatures(photoUris: [String]) {
+    for uri in photoUris {
+      guard let lid = localIdentifier(from: uri) else { continue }
+      deleteCachedFeatures(localId: lid)
+    }
+  }
+
+  /// After library sync: keep only caches whose `localId` is still in the catalog.
+  static func pruneFeatureCache(livePhotoIds: Set<String>) {
+    let fm = FileManager.default
+    let dir = featureCacheDir
+    guard let urls = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+    var liveSafe = Set<String>()
+    liveSafe.reserveCapacity(livePhotoIds.count)
+    for id in livePhotoIds {
+      liveSafe.insert(id.replacingOccurrences(of: "/", with: "_"))
+    }
+    for fileURL in urls {
+      let name = fileURL.lastPathComponent
+      guard name.hasSuffix(".bin") else { continue }
+      let base = (name as NSString).deletingPathExtension
+      guard let u = base.lastIndex(of: "_") else { continue }
+      let idPart = String(base[..<u])
+      if !liveSafe.contains(idPart) {
+        try? fm.removeItem(at: fileURL)
+      }
+    }
+  }
+
+  /// Same as `pruneFeatureCache` but accepts `ph://…` URIs from JS (photo library ids).
+  static func pruneFeatureCache(photoUris: [String]) {
+    var ids = Set<String>()
+    ids.reserveCapacity(photoUris.count)
+    for uri in photoUris {
+      if let lid = localIdentifier(from: uri) {
+        ids.insert(lid)
+      }
+    }
+    pruneFeatureCache(livePhotoIds: ids)
+  }
+
+  /// Drop `ai_feature_cache/v1` and `ai_feature_models/v1` after schema bump (v2 incompatible with zero-YOLO vectors).
+  static func purgeLegacyFeatureCacheVersions(keeping: Int) {
+    let fm = FileManager.default
+    let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    for i in 1..<keeping {
+      for root in ["ai_feature_cache", "ai_feature_models"] {
+        let url = docs.appendingPathComponent("\(root)/v\(i)", isDirectory: true)
+        if fm.fileExists(atPath: url.path) {
+          try? fm.removeItem(at: url)
+        }
+      }
+    }
   }
 
   // MARK: - Decode image

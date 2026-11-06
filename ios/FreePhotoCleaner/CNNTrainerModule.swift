@@ -281,4 +281,30 @@ class CNNTrainerModule: RCTEventEmitter {
       self.finish(resolve, scores)
     }
   }
+
+  @objc func getYOLOStatus(_ resolve: RCTPromiseResolveBlock, rejecter reject: RCTPromiseRejectBlock) {
+    resolve(YOLODetector.shared.statusDictionary())
+  }
+
+  /// Remove on-disk feature vectors for deleted photos (ph:// URIs).
+  @objc func deleteCachedFeatures(_ uris: [String],
+                                  resolver resolve: @escaping RCTPromiseResolveBlock,
+                                  rejecter reject: @escaping RCTPromiseRejectBlock) {
+    trainQueue.async { [weak self] in
+      guard let self = self else { return }
+      PhotoFeatures.deleteCachedFeatures(photoUris: uris)
+      self.finish(resolve, true)
+    }
+  }
+
+  /// Keep only caches for photos still in the library (ph:// URIs from catalog sync).
+  @objc func pruneFeatureCache(_ uris: [String],
+                               resolver resolve: @escaping RCTPromiseResolveBlock,
+                               rejecter reject: @escaping RCTPromiseRejectBlock) {
+    trainQueue.async { [weak self] in
+      guard let self = self else { return }
+      PhotoFeatures.pruneFeatureCache(photoUris: uris)
+      self.finish(resolve, true)
+    }
+  }
 }

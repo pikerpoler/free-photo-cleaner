@@ -64,6 +64,9 @@ yarn-debug.log
 # Build output
 build-output/
 
+# YOLOX export weights (downloaded by scripts/export_yolox_nano.py)
+build/yolox_nano.pth
+
 # Yarn
 .yarn/*
 !.yarn/patches

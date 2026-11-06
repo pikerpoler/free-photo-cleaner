@@ -10,9 +10,9 @@ Swipe keep/delete → SQLite labels → Extract features (cached) → Train the 
 
 ## Features (53)
 
-Photometric stats (16), YOLOX geometry + 11 category pairs (28), Vision faces + text (6), screenshot / WhatsApp / aspect (3). See `ios/FreePhotoCleaner/FeatureSchema.swift` and `experiments/ai-models-changes/photo_features.py`.
+Photometric stats (16), YOLOX geometry + 13 category pairs (32; dog and cat have their own categories, other animals share one), Vision faces + text (6), screenshot / WhatsApp / aspect (3). See `ios/FreePhotoCleaner/FeatureSchema.swift` and `experiments/ai-models-changes/photo_features.py`.
 
-YOLOX-Nano Core ML model: run `python scripts/export_yolox_nano.py` and add `YOLOXNano.mlpackage` to the app bundle. Without it, YOLO slots stay zero; Vision and photometric features still run.
+YOLOX-Nano Core ML model: `PYTHONPATH=/path/to/YOLOX python scripts/export_yolox_nano.py --download-weights --verify` writes `ios/FreePhotoCleaner/Models/YOLOXNano.mlpackage` (~2 MB raw head `[1,3549,85]`). Xcode includes it in **Copy Bundle Resources**. On device, Swift decodes boxes + NMS (same math as YOLOX `decode_outputs` + `torchvision.ops.batched_nms`). If the model is missing or fails to load, the Train AI screen shows a warning and feature caches are not persisted for degraded runs; Vision + photometric features still run.
 
 ## Models
 
@@ -29,10 +29,10 @@ Train updates **only the selected model**, and only with photos that model has n
 ## Storage
 
 ```
-Documents/ai_feature_cache/v1/          # cached 53-vectors
-Documents/ai_feature_models/v1/         # one folder per model
-Documents/ai_feature_models/v1/asset_slots.bin
-Documents/ai_feature_models/v1/<id>/trained.bits
+Documents/ai_feature_cache/v2/          # cached 53-vectors (version tracks `FeatureSchema.version`)
+Documents/ai_feature_models/v2/         # one folder per model
+Documents/ai_feature_models/v2/asset_slots.bin
+Documents/ai_feature_models/v2/<id>/trained.bits
 ```
 
 Legacy CNN checkpoints under `Documents/ai_models/` without `featureSchemaVersion` are removed on trainer startup.
