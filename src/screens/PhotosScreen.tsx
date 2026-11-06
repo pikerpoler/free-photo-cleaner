@@ -166,18 +166,25 @@ export function PhotosScreen() {
         <Text style={[styles.emptySubtitle, isDark && styles.textSecondary]}>
           No more photos to review.
         </Text>
-        {photoPendingCount > 0 && (
-          <TouchableOpacity
-            onPress={handleDelete}
-            style={styles.deleteButtonLarge}>
-            {photoPendingCount >= BATCH_WARNING_THRESHOLD && (
-              <Text style={styles.warningIcon}>⚠️ </Text>
-            )}
-            <Text style={styles.deleteButtonLargeText}>
-              Delete {photoPendingCount}
-            </Text>
-          </TouchableOpacity>
-        )}
+        <View style={styles.emptyActions}>
+          {canUndo && (
+            <TouchableOpacity onPress={handleUndo} style={styles.undoButton}>
+              <Text style={styles.undoText}>Undo</Text>
+            </TouchableOpacity>
+          )}
+          {photoPendingCount > 0 && (
+            <TouchableOpacity
+              onPress={handleDelete}
+              style={styles.deleteButtonLarge}>
+              {photoPendingCount >= BATCH_WARNING_THRESHOLD && (
+                <Text style={styles.warningIcon}>⚠️ </Text>
+              )}
+              <Text style={styles.deleteButtonLargeText}>
+                Delete {photoPendingCount}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
         {trainButton}
         <StorageBar />
         {trainModal}
@@ -311,6 +318,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+  emptyActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 20,
+  },
   deleteButtonLarge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -318,7 +333,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: '#ff3b30',
     borderRadius: 10,
-    marginTop: 20,
     gap: 4,
   },
   deleteButtonLargeText: {

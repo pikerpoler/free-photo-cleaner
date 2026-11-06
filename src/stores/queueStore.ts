@@ -26,6 +26,7 @@ import {
   upsertCatalogAssets,
   getCatalogAssets,
   pruneCatalogToIds,
+  getPersistedUndoStack,
 } from '../services/database';
 import {useAIStore} from './aiStore';
 
@@ -62,6 +63,8 @@ interface QueueState {
   getCurrentAsset: (type: MediaType) => MediaAsset | null;
   getNextAsset: (type: MediaType) => MediaAsset | null;
   resetAIQueue: () => Promise<void>;
+  /** Re-sync undo stacks from DB after settings cleared keep history */
+  onKeepHistoryReset: () => void;
 }
 
 let photoLoadController: ProgressiveLoadController | null = null;
@@ -435,8 +438,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   photoPendingCount: getPendingDeletesByType('photo').length,
   videoPendingCount: getPendingDeletesByType('video').length,
   photoEligibleCount: 0,
-  photoUndoStack: [],
-  videoUndoStack: [],
+  photoUndoStack: getPersistedUndoStack('photo') as UndoEntry[],
+  videoUndoStack: getPersistedUndoStack('video') as UndoEntry[],
 
   loadQueue: (type, sort, photoFilters, videoFilters, dateFilter) => {
     const isPhoto = type === 'photo';
@@ -737,7 +740,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const currentStack =
       type === 'photo' ? state.photoUndoStack : state.videoUndoStack;
 
-    markAssetKept(asset.id);
+    markAssetKept(asset.id, type);
 
     set({
       [indexKey]: index + 1,
@@ -861,6 +864,13 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       photoQueue: queue,
       photoIndex: 0,
       photoEligibleCount: countPhotoEligible(),
+    });
+  },
+
+  onKeepHistoryReset: () => {
+    set({
+      photoUndoStack: getPersistedUndoStack('photo') as UndoEntry[],
+      videoUndoStack: getPersistedUndoStack('video') as UndoEntry[],
     });
   },
 }));

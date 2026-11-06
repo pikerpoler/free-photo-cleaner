@@ -95,6 +95,7 @@ export function SettingsScreen() {
   const {hasModel, activeModelInfo, resetModel, refreshModelStatus, refreshCheckpoints, checkpoints, selectSortModel, deleteCheckpoint} =
     useAIStore();
   const resetAIQueue = useQueueStore(s => s.resetAIQueue);
+  const onKeepHistoryReset = useQueueStore(s => s.onKeepHistoryReset);
   const setAISortModel = useSettingsStore(s => s.setAISortModel);
 
   const [showFromPicker, setShowFromPicker] = useState(false);
@@ -115,11 +116,14 @@ export function SettingsScreen() {
         {
           text: 'Reset',
           style: 'destructive',
-          onPress: () => resetKeepHistory(),
+          onPress: () => {
+            resetKeepHistory();
+            onKeepHistoryReset();
+          },
         },
       ],
     );
-  }, []);
+  }, [onKeepHistoryReset]);
 
   const handleResetAIQueue = useCallback(() => {
     Alert.alert(

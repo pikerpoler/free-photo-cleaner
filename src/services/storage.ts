@@ -32,6 +32,8 @@ const KEYS = {
   LIBRARY_TOTAL_SPACE: 'library.totalSpace',
   LIBRARY_PHOTOS_SIZE: 'library.photosSize',
   LIBRARY_VIDEOS_SIZE: 'library.videosSize',
+  /** One-time backfill of swipe_decisions from kept_assets + pending_deletes */
+  SWIPE_DECISIONS_BACKFILL_DONE: 'migrate.swipeDecisionsBackfillDone',
 } as const;
 
 export function getSetting<T>(key: string, defaultValue: T): T {

@@ -46,8 +46,9 @@ SQLite (op-sqlite) for operational data. Single database instance.
 
 | Table | Columns | Purpose |
 |-------|---------|---------|
-| `kept_assets` | `id TEXT PRIMARY KEY, kept_at TEXT` | Assets user swiped right on |
-| `pending_deletes` | `id TEXT PRIMARY KEY, type TEXT, uri TEXT, added_at TEXT` | Assets pending batch deletion |
+| `kept_assets` | `id TEXT PRIMARY KEY, kept_at INTEGER` | Assets user swiped right on |
+| `pending_deletes` | `id TEXT PRIMARY KEY, uri, filename, file_size, media_type, added_at` | Assets pending batch deletion |
+| `swipe_decisions` | `id PK, asset_id, decision (keep\|delete), media_type, created_at` | Ordered swipe history for persistent undo |
 | `embedding_cache` | `asset_id TEXT PRIMARY KEY, embedding BLOB` | Cached AI embeddings |
 
 ### Exports
@@ -55,15 +56,16 @@ SQLite (op-sqlite) for operational data. Single database instance.
 | Export | Purpose |
 |--------|---------|
 | `getDatabase()` | Initialize DB, create tables, return instance |
-| `markAssetKept(id)` | Insert into kept_assets |
+| `markAssetKept(id, mediaType)` | Insert into kept_assets and append swipe_decisions |
+| `getPersistedUndoStack(mediaType)` | Build undo stack for a type from swipe_decisions + catalog/pending |
 | `isAssetKept(id)` | Check if exists in kept_assets |
 | `getKeptAssetIds()` | Return all kept IDs as Set |
-| `addPendingDelete(id, type, uri)` | Insert into pending_deletes |
+| `addPendingDelete(...)` | Insert into pending_deletes and append swipe_decisions |
 | `getPendingDeletesByType(type)` | Get all pending for type |
 | `getPendingDeleteIds()` | Return all pending IDs as Set |
-| `removePendingDelete(id)` | Remove single pending |
-| `clearPendingDeletesByType(type)` | Clear all pending for type |
-| `resetKeepHistory()` | Drop and recreate kept_assets |
+| `removePendingDelete(id)` | Remove pending row and matching swipe_decisions row |
+| `clearPendingDeletesByType(type)` | Clear pending and all swipe_decisions for that type |
+| `resetKeepHistory()` | Clear kept_assets and `keep` rows in swipe_decisions |
 
 ---
 
@@ -82,7 +84,7 @@ const KEYS: Record<string, string>;          // Setting key constants
 
 ### Keys
 
-`photoSort`, `videoSort`, `photoFilters`, `videoFilters`, `dateFilter`, `theme`, `trainAI`, `aiModelSize`, `aiBatchSize`, `aiLearningRate`
+`photoSort`, `videoSort`, `photoFilters`, `videoFilters`, `dateFilter`, `theme`, `trainAI`, `aiModelSize`, `aiBatchSize`, `aiLearningRate`, `migrate.swipeDecisionsBackfillDone`
 
 ---
 

@@ -37,8 +37,8 @@ User swipes right
       → advanceIndex: reset exiting slot, call onSwipeRight(), flip topSlot
         → PhotosScreen.handleSwipeRight()
           → queueStore.swipeRight('photo')
-            → database.markAssetKept(id)
-            → Push to undoStack
+            → database.markAssetKept(id, 'photo') + append swipe_decisions
+            → Push to undoStack (mirrors DB)
             → Advance photoIndex
             → If trainAI: aiStore.trainOnSwipe(id, 0)  // 0 = keep
 ```
@@ -48,9 +48,9 @@ User swipes right
 ```
 Same animation flow, then:
   → queueStore.swipeLeft('photo')
-    → database.addPendingDelete(id, type, uri)
+    → database.addPendingDelete(...) + append swipe_decisions
     → Increment photoPendingCount
-    → Push to undoStack
+    → Push to undoStack (mirrors DB)
     → Advance photoIndex
     → If trainAI: aiStore.trainOnSwipe(id, 1)  // 1 = delete
 ```
@@ -61,9 +61,8 @@ Same animation flow, then:
 User taps Undo
   → queueStore.undo('photo')
     → Pop undoStack
-    → Decrement photoIndex
-    → If was delete: database.removePendingDelete(id), decrement pendingCount
-    → If was keep: remove from kept_assets
+    → If was delete: database.removePendingDelete(id) (also removes swipe_decisions row), decrement pendingCount
+    → If was keep: removeAssetFromKept (also removes swipe_decisions row)
     → Restore queue to pre-swipe state
 ```
 
@@ -79,10 +78,12 @@ User taps "Delete N"
       → iOS: nativeStorage.batchDeleteAssets(uris)
              → CameraRoll.deletePhotos(uris) (system confirmation)
       → Android: sequential deleteAsset(uri) per URI
-      → database.clearPendingDeletesByType('photo')
+      → database.clearPendingDeletesByType('photo') (clears swipe_decisions for photos)
       → Reset pendingCount, undo stack
       → nativeStorage.invalidateStorageCache()
 ```
+
+**App launch**: `queueStore` initializes `photoUndoStack` / `videoUndoStack` from `getPersistedUndoStack` so undo works after a cold start until batch delete runs.
 
 ## 4. AI Training Pipeline
 
