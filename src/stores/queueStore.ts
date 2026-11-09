@@ -32,6 +32,11 @@ import {
 } from '../services/database';
 import {useAIStore} from './aiStore';
 import {deleteCachedFeatures, pruneFeatureCacheFromUris} from '../services/cnnTrainer';
+import {
+  cancelTrainingExample,
+  captureTrainingExample,
+  waitForTrainingCaptures,
+} from '../services/trainingCapture';
 
 type UndoEntry = {type: 'keep' | 'delete'; asset: MediaAsset; queue: MediaType};
 
@@ -864,6 +869,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     });
 
     if (type === 'photo') {
+      captureTrainingExample(asset.id, asset.uri, 1);
       maybeRefillAIQueue(set, get);
     }
   },
@@ -890,6 +896,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     });
 
     if (type === 'photo') {
+      captureTrainingExample(asset.id, asset.uri, 0);
       maybeRefillAIQueue(set, get);
     }
   },
@@ -903,6 +910,10 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         `No pending ${type} deletions found in database.`,
       );
       return;
+    }
+
+    if (type === 'photo') {
+      await waitForTrainingCaptures(pending.map(p => p.id));
     }
 
     const uris = pending.map(p => p.uri);
@@ -970,6 +981,9 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       removeAssetFromKept(lastEntry.asset.id);
     } else {
       removePendingDelete(lastEntry.asset.id);
+    }
+    if (isPhoto) {
+      cancelTrainingExample(lastEntry.asset.id);
     }
 
     const queue = isPhoto ? state.photoQueue : state.videoQueue;

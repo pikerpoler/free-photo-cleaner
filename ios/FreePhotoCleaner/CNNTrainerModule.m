@@ -27,6 +27,10 @@ RCT_EXTERN_METHOD(resetActiveModel:(RCTPromiseResolveBlock)resolve rejecter:(RCT
 
 RCT_EXTERN_METHOD(stopTraining:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(extractFeatures:(NSString *)uri
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(startTraining:(NSDictionary *)config
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)

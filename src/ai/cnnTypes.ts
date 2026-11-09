@@ -15,7 +15,7 @@ export const TRAINABLE_MODELS: {id: TrainableModelId; label: string}[] = [
 
 export const DEFAULT_TRAINABLE_MODEL: TrainableModelId = 'catboost';
 export const MIN_LABELED_FOR_TRAIN = 20;
-export const FEATURE_DIM = 53;
+export const FEATURE_DIM = 57;
 /** Bump in Swift `FeatureSchema.version` — JS can show retrain messaging. */
 export const FEATURE_SCHEMA_VERSION = 3;
 
@@ -90,8 +90,11 @@ export const DEFAULT_TRAIN_RESIZE: TrainResize = 64;
 export const TRAIN_TEST_RATIO = 1;
 
 export interface TrainingConfig {
-  uris: string[];
+  /** Saved feature rows from `training_examples`. */
+  features: number[][];
   labels: number[];
+  /** @deprecated Training reads saved feature rows instead of photo URIs. */
+  uris?: string[];
   modelId: TrainableModelId;
   batchSize?: number;
   learningRate?: number;

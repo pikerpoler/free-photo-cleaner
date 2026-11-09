@@ -74,6 +74,16 @@ export function getDatabase(): DB {
     ON swipe_decisions(media_type, id DESC)
   `);
 
+  db.executeSync(`
+    CREATE TABLE IF NOT EXISTS training_examples (
+      asset_id TEXT PRIMARY KEY,
+      label INTEGER NOT NULL CHECK(label IN (0, 1)),
+      features TEXT NOT NULL,
+      schema_version INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+
   maybeBackfillSwipeDecisionsFromLegacy(db);
 
   return db;

@@ -99,6 +99,23 @@ class CNNTrainerModule: RCTEventEmitter {
     resolve(true)
   }
 
+  @objc func extractFeatures(_ uri: String,
+                             resolver resolve: @escaping RCTPromiseResolveBlock,
+                             rejecter reject: @escaping RCTPromiseRejectBlock) {
+    trainQueue.async { [weak self] in
+      guard let self = self else { return }
+      guard YOLODetector.shared.shouldPersistFeatureCache else {
+        self.finish(resolve, NSNull())
+        return
+      }
+      if let vec = self.extractor.extractVector(uri: uri), vec.count == FeatureSchema.dim {
+        self.finish(resolve, vec.map { Double($0) })
+      } else {
+        self.finish(resolve, NSNull())
+      }
+    }
+  }
+
   @objc func startTraining(_ config: NSDictionary,
                            resolver resolve: @escaping RCTPromiseResolveBlock,
                            rejecter reject: @escaping RCTPromiseRejectBlock) {
@@ -106,9 +123,9 @@ class CNNTrainerModule: RCTEventEmitter {
       reject("BUSY", "Training already in progress", nil)
       return
     }
-    guard let uris = config["uris"] as? [String],
+    guard let featureRows = config["features"] as? [Any],
           let labels = config["labels"] as? [NSNumber] else {
-      reject("BAD_CONFIG", "Missing uris/labels", nil)
+      reject("BAD_CONFIG", "Missing features/labels", nil)
       return
     }
     let requested = (config["modelId"] as? String) ?? bank.activeModelId
@@ -139,88 +156,67 @@ class CNNTrainerModule: RCTEventEmitter {
 
     trainQueue.async { [weak self] in
       guard let self = self else { return }
-      defer { self.isTraining = false }
+      defer {
+        self.bank.discardPending()
+        self.isTraining = false
+      }
 
-      var sampleIds: [String] = []
       var rows: [[Float]] = []
       var y: [Float] = []
-      let count = min(uris.count, labels.count)
+      let count = min(featureRows.count, labels.count)
       var unreadable = 0
+      let tooFewMessage =
+        "Training needs at least 20 saved photos, including at least 2 kept and 2 marked for deletion."
 
       for idx in 0..<count {
         if self.stopRequested { break }
-        let uri = uris[idx]
-        let label = Float(truncating: labels[idx])
-        guard let localId = PhotoFeatures.localIdentifier(from: uri) else {
+        guard let nums = featureRows[idx] as? [NSNumber], nums.count == FeatureSchema.dim else {
           unreadable += 1
           continue
         }
-        if self.bank.isIncorporated(localId, modelId: modelId) { continue }
-
-        self.emit("trainingProgress", body: [
-          "phase": "features",
-          "index": idx + 1,
-          "total": count,
-          "done": false,
-        ])
-
-        guard let vec = self.extractor.extractVector(uri: uri) else {
-          unreadable += 1
-          continue
-        }
-        sampleIds.append(localId)
-        rows.append(vec)
-        y.append(label)
+        rows.append(nums.map { $0.floatValue })
+        y.append(Float(truncating: labels[idx]))
       }
 
-      if rows.isEmpty {
-        if unreadable > 0 {
-          self.fail(
-            reject,
-            "TOO_FEW",
-            "Each training session needs at least 20 new photos this model has not learned yet, including at least 2 kept and 2 marked for deletion."
-          )
-        } else {
-          self.fail(
-            reject,
-            "NO_NEW",
-            "This model already includes every labeled photo. Training only adds photos it has not seen. Delete the model at the bottom of this screen to train it from scratch."
-          )
-        }
+      if self.stopRequested {
+        let result: [String: Any] = [
+          "epochsRan": 0,
+          "bestTestLoss": NSNull(),
+          "bestTestAcc": NSNull(),
+          "accuracy": NSNull(),
+          "f1": NSNull(),
+          "cancelled": true,
+          "trainSize": 0,
+          "testSize": 0,
+          "skippedUnreadable": unreadable,
+          "modelId": modelId,
+          "trainResize": 0,
+        ]
+        self.emit("trainingComplete", body: result)
+        self.finish(resolve, result)
         return
       }
+
       if rows.count < 20 {
-        self.fail(
-          reject,
-          "TOO_FEW",
-          "Each training session needs at least 20 new photos this model has not learned yet, including at least 2 kept and 2 marked for deletion."
-        )
+        self.fail(reject, "TOO_FEW", tooFewMessage)
         return
       }
       let nKeep = y.filter { $0 < 0.5 }.count
       let nDel = y.count - nKeep
       if nKeep < 2 || nDel < 2 {
-        self.fail(
-          reject,
-          "TOO_FEW",
-          "Each training session needs at least 20 new photos this model has not learned yet, including at least 2 kept and 2 marked for deletion."
-        )
+        self.fail(reject, "TOO_FEW", tooFewMessage)
         return
       }
 
       let seed = Int(Date().timeIntervalSince1970) % 10_000
       guard let split = stratifiedInnerSplit(labels: y, seed: seed) else {
-        self.fail(
-          reject,
-          "TOO_FEW",
-          "Each training session needs at least 20 new photos this model has not learned yet, including at least 2 kept and 2 marked for deletion."
-        )
+        self.fail(reject, "TOO_FEW", tooFewMessage)
         return
       }
       let trainIdx = split.0
       let testIdx = split.1
 
-      let metrics = self.bank.updateSelected(
+      let metrics = self.bank.trainReplacement(
         modelId: modelId,
         rows: rows,
         labels: y,
@@ -249,15 +245,35 @@ class CNNTrainerModule: RCTEventEmitter {
         }
       )
 
+      if self.stopRequested {
+        self.bank.discardPending()
+        let result: [String: Any] = [
+          "epochsRan": metrics.epoch,
+          "bestTestLoss": NSNull(),
+          "bestTestAcc": NSNull(),
+          "accuracy": NSNull(),
+          "f1": NSNull(),
+          "cancelled": true,
+          "trainSize": trainIdx.count,
+          "testSize": testIdx.count,
+          "skippedUnreadable": unreadable,
+          "modelId": modelId,
+          "trainResize": 0,
+        ]
+        self.emit("trainingComplete", body: result)
+        self.finish(resolve, result)
+        return
+      }
+
       do {
         try self.bank.saveSelected(
           modelId: modelId,
-          newIds: trainIdx.map { sampleIds[$0] },
           metrics: metrics,
           trainSize: trainIdx.count,
           testSize: testIdx.count
         )
       } catch {
+        self.bank.discardPending()
         self.fail(reject, "SAVE_FAILED", error.localizedDescription)
         return
       }
@@ -268,7 +284,7 @@ class CNNTrainerModule: RCTEventEmitter {
         "bestTestAcc": metrics.testAcc,
         "accuracy": metrics.testAcc,
         "f1": metrics.f1,
-        "cancelled": self.stopRequested,
+        "cancelled": false,
         "trainSize": trainIdx.count,
         "testSize": testIdx.count,
         "skippedUnreadable": unreadable,

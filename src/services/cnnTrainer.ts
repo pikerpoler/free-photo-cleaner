@@ -1,5 +1,6 @@
 import {NativeEventEmitter, NativeModules, Platform} from 'react-native';
 import {
+  FEATURE_DIM,
   ModelCheckpointInfo,
   ModelStatus,
   TrainingConfig,
@@ -85,6 +86,19 @@ export async function resetActiveModel(): Promise<void> {
 export async function stopTraining(): Promise<void> {
   if (!(await isTrainerAvailable())) return;
   await CNNTrainerModule.stopTraining();
+}
+
+export async function extractPhotoFeatures(
+  uri: string,
+): Promise<number[] | null> {
+  if (!(await isTrainerAvailable())) return null;
+  try {
+    const vec = await CNNTrainerModule.extractFeatures(uri);
+    if (!Array.isArray(vec) || vec.length !== FEATURE_DIM) return null;
+    return vec.map((n: number) => Number(n));
+  } catch {
+    return null;
+  }
 }
 
 export async function startTraining(

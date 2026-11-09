@@ -39,13 +39,13 @@
 		A1B2C3D61234567800FACADE /* FreePhotoCleaner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "FreePhotoCleaner-Bridging-Header.h"; path = "FreePhotoCleaner/FreePhotoCleaner-Bridging-Header.h"; sourceTree = "<group>"; };
 		B2C3D4E51234567800TRAIN /* CNNTrainerModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CNNTrainerModule.swift; path = FreePhotoCleaner/CNNTrainerModule.swift; sourceTree = "<group>"; };
 		B2C3D4E61234567800TRAIN /* CNNTrainerModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = CNNTrainerModule.m; path = FreePhotoCleaner/CNNTrainerModule.m; sourceTree = "<group>"; };
+		D4E5F6022345678900YOLO /* YOLOXNano.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; name = YOLOXNano.mlpackage; path = FreePhotoCleaner/Models/YOLOXNano.mlpackage; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F1E2A3B11234567800FEAT /* FeatureSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FeatureSchema.swift; path = FreePhotoCleaner/FeatureSchema.swift; sourceTree = "<group>"; };
 		F1E2A3B21234567800FEAT /* PhotoFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PhotoFeatures.swift; path = FreePhotoCleaner/PhotoFeatures.swift; sourceTree = "<group>"; };
 		F1E2A3B31234567800FEAT /* YOLODetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YOLODetector.swift; path = FreePhotoCleaner/YOLODetector.swift; sourceTree = "<group>"; };
 		F1E2A3B41234567800FEAT /* ScoreModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScoreModels.swift; path = FreePhotoCleaner/ScoreModels.swift; sourceTree = "<group>"; };
 		F1E2A3B51234567800FEAT /* ScoreModels+MLP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "ScoreModels+MLP.swift"; path = "FreePhotoCleaner/ScoreModels+MLP.swift"; sourceTree = "<group>"; };
-		D4E5F6022345678900YOLO /* YOLOXNano.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; name = YOLOXNano.mlpackage; path = FreePhotoCleaner/Models/YOLOXNano.mlpackage; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */

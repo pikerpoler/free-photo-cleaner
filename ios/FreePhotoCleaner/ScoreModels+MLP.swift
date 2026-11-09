@@ -644,6 +644,11 @@ final class FeatureModelBank {
   private var mlpSmall = MLPScorer(modelId: "mlp-small", hidden: [16])
   private var mlpBig = MLPScorer(modelId: "mlp-big", hidden: [128, 64, 32, 16, 8])
   private var naiveBayes = GaussianNBScorer()
+  private var pendingLogistic: LogisticHessianScorer?
+  private var pendingCatboost: BoostedTreeScorer?
+  private var pendingMlpSmall: MLPScorer?
+  private var pendingMlpBig: MLPScorer?
+  private var pendingNaiveBayes: GaussianNBScorer?
   private var records: [String: ModelScoreRecord] = [:]
   private var trainedIndex: TrainedPhotoIndex!
   var activeModelId = "catboost"
@@ -747,10 +752,54 @@ final class FeatureModelBank {
     }
   }
 
+  func discardPending() {
+    pendingLogistic = nil
+    pendingCatboost = nil
+    pendingMlpSmall = nil
+    pendingMlpBig = nil
+    pendingNaiveBayes = nil
+  }
+
   func saveSelected(
-    modelId: String, newIds: [String], metrics: TrainingBatchMetrics, trainSize: Int, testSize: Int
+    modelId: String, metrics: TrainingBatchMetrics, trainSize: Int, testSize: Int
   ) throws {
-    trainedIndex.mark(newIds, modelId: modelId)
+    let dir = modelDir(modelId)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    switch modelId {
+    case "logistic-l2":
+      guard let fresh = pendingLogistic else {
+        throw NSError(domain: "FeatureAI", code: 1, userInfo: [NSLocalizedDescriptionKey: "No replacement model"])
+      }
+      try fresh.save(to: dir)
+      logistic = fresh
+    case "catboost":
+      guard let fresh = pendingCatboost else {
+        throw NSError(domain: "FeatureAI", code: 1, userInfo: [NSLocalizedDescriptionKey: "No replacement model"])
+      }
+      try fresh.save(to: dir)
+      catboost = fresh
+    case "mlp-small":
+      guard let fresh = pendingMlpSmall else {
+        throw NSError(domain: "FeatureAI", code: 1, userInfo: [NSLocalizedDescriptionKey: "No replacement model"])
+      }
+      try fresh.save(to: dir)
+      mlpSmall = fresh
+    case "mlp-big":
+      guard let fresh = pendingMlpBig else {
+        throw NSError(domain: "FeatureAI", code: 1, userInfo: [NSLocalizedDescriptionKey: "No replacement model"])
+      }
+      try fresh.save(to: dir)
+      mlpBig = fresh
+    case "gaussian-nb":
+      guard let fresh = pendingNaiveBayes else {
+        throw NSError(domain: "FeatureAI", code: 1, userInfo: [NSLocalizedDescriptionKey: "No replacement model"])
+      }
+      try fresh.save(to: dir)
+      naiveBayes = fresh
+    default:
+      throw NSError(domain: "FeatureAI", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unknown model"])
+    }
+    discardPending()
     let record = ModelScoreRecord(
       trainedAtMs: Date().timeIntervalSince1970 * 1000,
       accuracy: metrics.testAcc,
@@ -759,8 +808,6 @@ final class FeatureModelBank {
       testSize: testSize
     )
     records[modelId] = record
-    let dir = modelDir(modelId)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let meta: [String: Any] = [
       "trainedAt": record.trainedAtMs,
       "accuracy": Double(record.accuracy),
@@ -769,14 +816,6 @@ final class FeatureModelBank {
       "testSize": testSize,
     ]
     try JSONSerialization.data(withJSONObject: meta).write(to: dir.appendingPathComponent("metrics.json"))
-    switch modelId {
-    case "logistic-l2": try logistic.save(to: dir)
-    case "catboost": try catboost.save(to: dir)
-    case "mlp-small": try mlpSmall.save(to: dir)
-    case "mlp-big": try mlpBig.save(to: dir)
-    case "gaussian-nb": try naiveBayes.save(to: dir)
-    default: break
-    }
     try? activeModelId.write(to: activeURL, atomically: true, encoding: .utf8)
   }
 
@@ -852,7 +891,8 @@ final class FeatureModelBank {
     }
   }
 
-  func updateSelected(
+  /// Fit a blank scorer on the full dataset. The live model stays put until `saveSelected`.
+  func trainReplacement(
     modelId: String,
     rows: [[Float]],
     labels: [Float],
@@ -865,27 +905,45 @@ final class FeatureModelBank {
     shouldStop: () -> Bool,
     onEpoch: (Int, Float, Float, Float, Float, Float) -> Void
   ) -> TrainingBatchMetrics {
+    discardPending()
     switch modelId {
     case "catboost":
-      return catboost.updateBatch(
+      var fresh = BoostedTreeScorer()
+      let metrics = fresh.updateBatch(
         rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed, hyper: catboostHyper
       )
+      if !shouldStop() { pendingCatboost = fresh }
+      return metrics
     case "mlp-small":
-      return mlpSmall.update(
+      var fresh = MLPScorer(modelId: "mlp-small", hidden: [16])
+      let metrics = fresh.update(
         rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed,
         hyper: mlpHyper, shouldStop: shouldStop, onEpoch: onEpoch
       )
+      if !shouldStop() { pendingMlpSmall = fresh }
+      return metrics
     case "mlp-big":
-      return mlpBig.update(
+      var fresh = MLPScorer(modelId: "mlp-big", hidden: [128, 64, 32, 16, 8])
+      let metrics = fresh.update(
         rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed,
         hyper: mlpHyper, shouldStop: shouldStop, onEpoch: onEpoch
       )
+      if !shouldStop() { pendingMlpBig = fresh }
+      return metrics
     case "gaussian-nb":
-      return naiveBayes.updateBatch(rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed)
+      var fresh = GaussianNBScorer()
+      let metrics = fresh.updateBatch(
+        rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed
+      )
+      if !shouldStop() { pendingNaiveBayes = fresh }
+      return metrics
     default:
-      return logistic.updateBatch(
+      var fresh = LogisticHessianScorer()
+      let metrics = fresh.updateBatch(
         rows: rows, labels: labels, trainIdx: trainIdx, testIdx: testIdx, seed: seed, hyper: logisticHyper
       )
+      if !shouldStop() { pendingLogistic = fresh }
+      return metrics
     }
   }
 

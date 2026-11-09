@@ -15,9 +15,7 @@ import {useFocusEffect} from '@react-navigation/native';
 import {useSettingsStore} from '../stores/settingsStore';
 import {useAIStore} from '../stores/aiStore';
 import {useQueueStore} from '../stores/queueStore';
-import {getLabeledPhotoSamples} from '../services/database';
 import {
-  deleteModel,
   getModelStatus,
   getYOLOStatus,
   isTrainerAvailable,
@@ -25,11 +23,19 @@ import {
   stopTraining,
   subscribeTrainingProgress,
 } from '../services/cnnTrainer';
+import {backfillTrainingDataset} from '../services/trainingCapture';
+import {
+  clearTrainingDataset,
+  getTrainingDatasetStats,
+  getTrainingExamples,
+  TrainingDatasetStats,
+} from '../services/trainingDataset';
 import {
   FEATURE_SCHEMA_VERSION,
   isMlpModel,
   LR_SCHEDULERS,
   LrSchedulerId,
+  MIN_LABELED_FOR_TRAIN,
   ModelStatus,
   TRAINABLE_MODELS,
   TrainableModelId,
@@ -52,6 +58,12 @@ type HistoryPoint = {
   trainAcc: number;
   testAcc: number;
 };
+
+function formatDatasetBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function MetricChart({
   points,
@@ -180,7 +192,12 @@ export function TrainAIScreen() {
 
   const [available, setAvailable] = useState(Platform.OS === 'ios');
   const [isTraining, setIsTraining] = useState(false);
-  const [counts, setCounts] = useState({kept: 0, pendingDelete: 0});
+  const [counts, setCounts] = useState<TrainingDatasetStats>({
+    kept: 0,
+    pendingDelete: 0,
+    total: 0,
+    bytes: 0,
+  });
   const [progress, setProgress] = useState<TrainingProgress | null>(null);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [statusText, setStatusText] = useState('');
@@ -201,12 +218,11 @@ export function TrainAIScreen() {
   );
 
   const mlp = isMlpModel(selectedModel);
-  const labeledTotal = counts.kept + counts.pendingDelete;
-  const learnedCount = modelStatus?.learnedCount ?? 0;
-  const newSinceUpdate = Math.max(0, labeledTotal - learnedCount);
-
+  const labeledTotal = counts.total;
   const meetsRules =
-    newSinceUpdate >= 20 && counts.kept >= 2 && counts.pendingDelete >= 2;
+    labeledTotal >= MIN_LABELED_FOR_TRAIN &&
+    counts.kept >= 2 &&
+    counts.pendingDelete >= 2;
 
   const canTrain = available && !isTraining && !trainBlocked && meetsRules;
 
@@ -231,10 +247,10 @@ export function TrainAIScreen() {
   const blockMessage =
     !available || isTraining || canTrain
       ? ''
-      : 'Each training session needs at least 20 new photos this model has not learned yet, including at least 2 kept and 2 marked for deletion.';
+      : 'Training needs at least 20 saved photos, including at least 2 kept and 2 marked for deletion.';
 
   const readyMessage = canTrain
-    ? `${newSinceUpdate} new photo${newSinceUpdate === 1 ? '' : 's'} since the last update.`
+    ? `${labeledTotal} saved photo${labeledTotal === 1 ? '' : 's'} ready to train.`
     : '';
 
   const reloadStatus = useCallback(() => {
@@ -246,14 +262,7 @@ export function TrainAIScreen() {
   }, []);
 
   const reloadCounts = useCallback(() => {
-    const samples = getLabeledPhotoSamples();
-    let kept = 0;
-    let pendingDelete = 0;
-    for (const sample of samples) {
-      if (sample.label === 0) kept += 1;
-      else pendingDelete += 1;
-    }
-    setCounts({kept, pendingDelete});
+    setCounts(getTrainingDatasetStats());
   }, []);
 
   useEffect(() => {
@@ -277,6 +286,9 @@ export function TrainAIScreen() {
       reloadCounts();
       reloadStatus();
       reloadYoloStatus();
+      backfillTrainingDataset()
+        .then(() => reloadCounts())
+        .catch(() => {});
       return () => {
         const target = selectedModelRef.current;
         const state = useAIStore.getState();
@@ -360,13 +372,12 @@ export function TrainAIScreen() {
   const explainDataset = useCallback(() => {
     Alert.alert(
       'Train locally',
-      'The images are passed through a feature extractor and fed into AI models to be trained locally. Nothing is uploaded. Older devices may experience slower training.\n\nEach training session is incremental and uses the photos the model hasn’t seen yet. It learns 80% of those photos and scores accuracy and F1 on the other 20%. Test photos are not learned yet, so a later session can train on them. To start over, you may delete the model.',
+      'The images are passed through a feature extractor and fed into AI models to be trained locally. Nothing is uploaded. Older devices may experience slower training.\n\nEach train rebuilds the selected model on every saved swipe: 80% to learn, 20% to score accuracy and F1. The current model stays until that run finishes. Feature vectors are kept even after photos are deleted.',
     );
   }, []);
 
   const handleTrain = useCallback(async () => {
     if (!canTrain) return;
-    const samples = getLabeledPhotoSamples();
     setIsTraining(true);
     const trainModel = selectedModel;
     if (isMlpModel(trainModel)) {
@@ -374,12 +385,16 @@ export function TrainAIScreen() {
       setHistory([]);
     }
     setProgress(null);
-    setStatusText('Starting training...');
+    setStatusText('Saving features...');
 
     try {
+      await backfillTrainingDataset();
+      reloadCounts();
+      const examples = getTrainingExamples();
+      setStatusText('Starting training...');
       const result = await startTraining({
-        uris: samples.map(s => s.uri),
-        labels: samples.map(s => s.label),
+        features: examples.map(s => s.features),
+        labels: examples.map(s => s.label),
         modelId: trainModel,
         batchSize: aiBatchSize,
         learningRate: aiStepSize,
@@ -412,7 +427,7 @@ export function TrainAIScreen() {
       const trainedNote = `Trained on ${result.trainSize}, tested on ${result.testSize}.${skipNote}`;
       setStatusText(
         result.cancelled
-          ? `Stopped. Test accuracy ${acc} · F1 ${f1}. ${trainedNote}`
+          ? 'Stopped. The current model was left unchanged.'
           : `Done. Test accuracy ${acc} · F1 ${f1}. ${trainedNote}`,
       );
       await refreshModelStatus();
@@ -426,6 +441,7 @@ export function TrainAIScreen() {
         code === 'NO_NEW' ||
         code === 'TOO_FEW' ||
         msg.includes('already includes every labeled') ||
+        msg.includes('Training needs at least') ||
         msg.includes('Each training session needs') ||
         msg.includes('Need at least');
       if (blocked) {
@@ -462,30 +478,24 @@ export function TrainAIScreen() {
     reloadCounts,
   ]);
 
-  const confirmDelete = useCallback(() => {
-    const label =
-      TRAINABLE_MODELS.find(m => m.id === selectedModel)?.label ?? selectedModel;
+  const confirmDeleteDataset = useCallback(() => {
     Alert.alert(
-      `Delete ${label}?`,
-      `This will delete ${label}'s weights. This action is irreversible. Are you sure?`,
+      'Delete dataset?',
+      'This cannot be undone. Are you sure?',
       [
         {text: 'Cancel', style: 'cancel'},
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: async () => {
-            await deleteModel(selectedModel);
-            clearMlpHistory(selectedModel);
-            setHistory([]);
-            setStatusText(`${label} deleted. The next train starts from scratch.`);
-            await refreshModelStatus();
-            reloadStatus();
+          onPress: () => {
+            clearTrainingDataset();
+            setStatusText('Dataset deleted. Swipe more photos to build a new one.');
             reloadCounts();
           },
         },
       ],
     );
-  }, [selectedModel, refreshModelStatus, reloadStatus, reloadCounts]);
+  }, [reloadCounts]);
 
   const onSelectModel = (id: TrainableModelId) => {
     if (isTraining) return;
@@ -539,8 +549,9 @@ export function TrainAIScreen() {
         Total: {labeledTotal}
       </Text>
       <Text style={[styles.body, isDark && styles.textSecondary]}>
-        Train updates only the selected model. Photos it has already learned are
-        skipped. Each session learns 80% of the new photos and scores the other 20%.
+        Train rebuilds the selected model on every saved swipe. It learns 80% of
+        the dataset and scores the other 20%. The current model stays until the
+        run finishes.
       </Text>
 
       <Text style={[styles.section, isDark && styles.textDark, styles.sectionSpaced]}>
@@ -602,14 +613,6 @@ export function TrainAIScreen() {
               </Text>
             </View>
           )}
-          <View style={styles.tableRow}>
-            <Text style={[styles.tableCell, isDark && styles.textSecondary]}>
-              Photos learned
-            </Text>
-            <Text style={[styles.tableValue, isDark && styles.textDark]}>
-              {modelStatus.learnedCount}
-            </Text>
-          </View>
         </View>
       ) : (
         <Text style={[styles.hint, isDark && styles.textSecondary]}>
@@ -920,16 +923,19 @@ export function TrainAIScreen() {
           : 'No trained model loaded for scoring yet.'}
       </Text>
 
+      <Text style={[styles.body, isDark && styles.textSecondary, styles.datasetNote]}>
+        Feature vectors from past swipes are kept even after photos are deleted.
+        Dataset storage: {formatDatasetBytes(counts.bytes)}.
+      </Text>
+
       <TouchableOpacity
         style={[
           styles.deleteBtn,
-          (!modelStatus?.hasModel || isTraining) && styles.btnDisabled,
+          (counts.total === 0 || isTraining) && styles.btnDisabled,
         ]}
-        disabled={!modelStatus?.hasModel || isTraining}
-        onPress={confirmDelete}>
-        <Text style={styles.deleteBtnText}>
-          Delete {TRAINABLE_MODELS.find(m => m.id === selectedModel)?.label ?? 'model'}
-        </Text>
+        disabled={counts.total === 0 || isTraining}
+        onPress={confirmDeleteDataset}>
+        <Text style={styles.deleteBtnText}>Delete dataset</Text>
       </TouchableOpacity>
     </ScrollView>
   );
@@ -957,6 +963,7 @@ const styles = StyleSheet.create({
   info: {fontSize: 18, color: '#007AFF'},
   label: {fontSize: 14, color: '#333', marginTop: 12},
   body: {fontSize: 14, color: '#555', marginBottom: 4},
+  datasetNote: {marginTop: 20, lineHeight: 20},
   textDark: {color: '#fff'},
   textSecondary: {color: '#8e8e93'},
   hint: {fontSize: 12, color: '#8e8e93', marginTop: 4},
