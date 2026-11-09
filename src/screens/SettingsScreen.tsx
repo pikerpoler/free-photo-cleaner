@@ -190,7 +190,6 @@ export function SettingsScreen() {
         await selectSortModel(modelId);
         setAISortModel(modelId);
         setAIModel(modelId);
-        await resetAIQueue();
       } catch (e: unknown) {
         Alert.alert(
           'Load failed',
@@ -198,7 +197,7 @@ export function SettingsScreen() {
         );
       }
     },
-    [selectSortModel, setAISortModel, setAIModel, resetAIQueue],
+    [selectSortModel, setAISortModel, setAIModel],
   );
 
   const handleDeleteCheckpoint = useCallback(

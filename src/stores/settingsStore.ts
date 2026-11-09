@@ -110,7 +110,7 @@ function getDefaultDateFilter(): DateFilter {
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
-  photoSort: 'newest_first',
+  photoSort: 'ai',
   videoSort: 'largest_first',
   photoFilters: DEFAULT_PHOTO_FILTERS,
   videoFilters: DEFAULT_VIDEO_FILTERS,
@@ -261,7 +261,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const rawModel = getSetting(KEYS.AI_MODEL, 'catboost' as string);
     const rawSort = getSetting<string | null>(KEYS.AI_SORT_MODEL, null);
     set({
-      photoSort: getSetting(KEYS.PHOTO_SORT, 'newest_first' as SortMode),
+      photoSort: getSetting(KEYS.PHOTO_SORT, 'ai' as SortMode),
       videoSort: getSetting(KEYS.VIDEO_SORT, 'largest_first' as SortMode),
       photoFilters: {
         ...DEFAULT_PHOTO_FILTERS,

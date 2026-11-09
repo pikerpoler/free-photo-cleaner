@@ -90,6 +90,8 @@ interface QueueState {
   getCurrentAsset: (type: MediaType) => MediaAsset | null;
   getNextAsset: (type: MediaType) => MediaAsset | null;
   resetAIQueue: () => Promise<void>;
+  /** Re-score when active model changed; scoring UI stays on Photos. */
+  reconcileAIScoringOnFocus: () => Promise<void>;
   /** Re-sync undo stacks from DB after settings cleared keep history */
   onKeepHistoryReset: () => void;
 }
@@ -103,20 +105,75 @@ let photoRawIds = new Set<string>();
 let videoRawCache: MediaAsset[] = [];
 let videoRawIds = new Set<string>();
 
-let currentPhotoSort: SortMode = 'newest_first';
+let currentPhotoSort: SortMode = 'ai';
 let currentVideoSort: SortMode = 'largest_first';
 let currentPhotoFilters: PhotoFilters | undefined;
 let currentVideoFilters: VideoFilters | undefined;
 let currentDateFilter: DateFilter | undefined;
 
 /** Max scored photos ahead of (and including) the current card for AI sort. */
-const AI_QUEUE_CAP = 300;
-/** Unscored candidates scored per refill pass. */
-const AI_SCORE_BATCH = 32;
-/** Kick another refill when the scored window drops below this. */
-const AI_REFILL_THRESHOLD = 250;
+const AI_QUEUE_CAP = 100;
+/** Unscored candidates scored per turnover refill. */
+const AI_SCORE_BATCH = 20;
+/** Kick turnover refill when remaining window drops to this (inclusive). */
+const AI_REFILL_THRESHOLD = 90;
+/** Lowest-scored remaining cards dropped before scoring new batch. */
+const AI_REFILL_DROP = 10;
 
 let aiFillInFlight = false;
+/** Bumped to cancel an in-flight AI fill (e.g. resetAIQueue). */
+let aiFillRunId = 0;
+/** True once the window first reaches AI_QUEUE_CAP; enables turnover refills. */
+let aiQueuePrimed = false;
+/** Dropped ids to skip when sampling the current refill batch. */
+let aiRefillExcludeIds = new Set<string>();
+
+type AIScoreStamp = {modelId: string; trainedAt: number};
+/** Model checkpoint that last scored the current AI queue (not a full reset). */
+let aiQueueScoreStamp: AIScoreStamp | null = null;
+
+function activeScoreStamp(): AIScoreStamp {
+  const {hasModel, activeModelInfo} = useAIStore.getState();
+  if (!hasModel || !activeModelInfo) {
+    return {modelId: '', trainedAt: 0};
+  }
+  return {
+    modelId: activeModelInfo.modelId,
+    trainedAt: activeModelInfo.trainedAt ?? 0,
+  };
+}
+
+function scoreStampsMatch(a: AIScoreStamp, b: AIScoreStamp): boolean {
+  return a.modelId === b.modelId && a.trainedAt === b.trainedAt;
+}
+
+function syncQueueScoreStamp(): void {
+  aiQueueScoreStamp = activeScoreStamp();
+}
+
+function queueNeedsRescoreForActiveModel(): boolean {
+  if (!aiQueueScoreStamp) return false;
+  return !scoreStampsMatch(aiQueueScoreStamp, activeScoreStamp());
+}
+
+function pickLowestRemainingIds(
+  remainder: MediaAsset[],
+  scoreById: Record<string, number>,
+  count: number,
+): string[] {
+  if (remainder.length === 0 || count <= 0) return [];
+  const take = Math.min(count, remainder.length);
+  const ranked = remainder.map((asset, pos) => ({
+    id: asset.id,
+    score: scoreById[asset.id] ?? 0,
+    pos,
+  }));
+  ranked.sort((a, b) => {
+    if (a.score !== b.score) return a.score - b.score;
+    return b.pos - a.pos;
+  });
+  return ranked.slice(0, take).map(row => row.id);
+}
 
 function dedupeById(assets: MediaAsset[]): MediaAsset[] {
   const seen = new Set<string>();
@@ -405,7 +462,10 @@ function restoreUndoneAsset(
   };
 }
 
-function rebuildAIQueueFromScores(get: () => QueueState): {
+function rebuildAIQueueFromScores(
+  get: () => QueueState,
+  freezeCurrent = true,
+): {
   queue: MediaAsset[];
   index: number;
   remaining: number;
@@ -428,19 +488,21 @@ function rebuildAIQueueFromScores(get: () => QueueState): {
   const index = state.photoIndex;
   const past = state.photoQueue.slice(0, index);
   const current = state.photoQueue[index];
-  const frozenIds = new Set(past.map(a => a.id));
-  if (current) frozenIds.add(current.id);
 
-  // Drop past/current cards that are no longer eligible, but keep anything
-  // still on the undo stack. Those cards sit just behind the cursor, and
-  // removing them makes undo pop the button without bringing the photo back.
+  // Drop past cards that are no longer eligible, but keep anything still on
+  // the undo stack. Those cards sit just behind the cursor, and removing them
+  // makes undo pop the button without bringing the photo back.
   const eligibleIds = new Set(eligible.map(a => a.id));
   const undoIds = new Set(state.photoUndoStack.map(entry => entry.asset.id));
   const pastKept = past.filter(
     a => eligibleIds.has(a.id) || undoIds.has(a.id),
   );
+  // Only a normal refill pins the card on screen. A fresh fill, model
+  // rescore, or hard reset re-ranks it with the rest of the window.
   const currentKept =
-    current && eligibleIds.has(current.id) ? current : undefined;
+    freezeCurrent && current && eligibleIds.has(current.id)
+      ? current
+      : undefined;
 
   const aheadCap = currentKept ? AI_QUEUE_CAP - 1 : AI_QUEUE_CAP;
   const frozenForAhead = new Set(pastKept.map(a => a.id));
@@ -455,8 +517,8 @@ function rebuildAIQueueFromScores(get: () => QueueState): {
 
   const queue = currentKept
     ? [...pastKept, currentKept, ...ahead]
-    : ahead;
-  const nextIndex = currentKept ? pastKept.length : 0;
+    : [...pastKept, ...ahead];
+  const nextIndex = pastKept.length;
   const remaining = queue.length - nextIndex;
 
   return {
@@ -468,6 +530,48 @@ function rebuildAIQueueFromScores(get: () => QueueState): {
   };
 }
 
+async function waitForAIFillIdle(): Promise<void> {
+  while (aiFillInFlight) {
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+  }
+}
+
+async function rescoreCurrentAIQueue(
+  set: (
+    partial:
+      | Partial<QueueState>
+      | ((state: QueueState) => Partial<QueueState>),
+  ) => void,
+  get: () => QueueState,
+): Promise<void> {
+  if (currentPhotoSort !== 'ai') return;
+  const state = get();
+  const past = state.photoQueue.slice(0, state.photoIndex);
+  const remaining = state.photoQueue.slice(state.photoIndex);
+  set({
+    photoQueue: past,
+    photoIndex: past.length,
+    isLoadingPhotos: true,
+    ...reviewStatsPartial(),
+  });
+  if (remaining.length > 0) {
+    useAIStore.getState().clearScoresForIds(remaining.map(a => a.id));
+    await useAIStore.getState().scoreAssets(remaining);
+  }
+  if (currentPhotoSort !== 'ai') return;
+  const built = rebuildAIQueueFromScores(get, false);
+  if (built.remaining >= AI_QUEUE_CAP) {
+    aiQueuePrimed = true;
+  }
+  set({
+    photoQueue: built.queue,
+    photoIndex: built.index,
+    isLoadingPhotos: false,
+    ...reviewStatsPartial(),
+  });
+  syncQueueScoreStamp();
+}
+
 async function ensureAIQueueFilled(
   set: (
     partial:
@@ -477,29 +581,15 @@ async function ensureAIQueueFilled(
   get: () => QueueState,
 ): Promise<void> {
   if (currentPhotoSort !== 'ai') return;
-  if (aiFillInFlight) return;
+  await waitForAIFillIdle();
+  const runId = ++aiFillRunId;
   aiFillInFlight = true;
 
   try {
-    while (currentPhotoSort === 'ai') {
-      const built = rebuildAIQueueFromScores(get);
-      const stillNeedScores =
-        built.remaining < AI_QUEUE_CAP && built.unscoredCount > 0;
-
-      set({
-        photoQueue: built.queue,
-        photoIndex: built.index,
-        isLoadingPhotos:
-          built.queue.length === 0 &&
-          (stillNeedScores || photoRawCache.length === 0),
-        ...reviewStatsPartial(),
-      });
-
-      if (!stillNeedScores) {
-        if (built.queue.length > 0 || built.unscoredCount === 0) {
-          set({isLoadingPhotos: false, ...reviewStatsPartial()});
-        }
-        break;
+    while (currentPhotoSort === 'ai' && runId === aiFillRunId) {
+      const built = rebuildAIQueueFromScores(get, aiQueuePrimed);
+      if (!aiQueuePrimed && built.remaining >= AI_QUEUE_CAP) {
+        aiQueuePrimed = true;
       }
 
       const scoreById = useAIStore.getState().scoreById;
@@ -510,17 +600,81 @@ async function ensureAIQueueFilled(
         undefined,
         currentDateFilter,
       );
-      const unscored = eligible.filter(a => scoreById[a.id] === undefined);
-      if (unscored.length === 0) {
-        set({isLoadingPhotos: false, ...reviewStatsPartial()});
+      const unscoredAll = eligible.filter(a => scoreById[a.id] === undefined);
+
+      const needInitialFill =
+        !aiQueuePrimed &&
+        built.remaining < AI_QUEUE_CAP &&
+        unscoredAll.length > 0;
+
+      const needTurnover =
+        aiQueuePrimed && built.remaining <= AI_REFILL_THRESHOLD;
+
+      set({
+        photoQueue: built.queue,
+        photoIndex: built.index,
+        isLoadingPhotos:
+          built.queue.length === 0 &&
+          (needInitialFill ||
+            needTurnover ||
+            photoRawCache.length === 0),
+        ...reviewStatsPartial(),
+      });
+
+      if (!needInitialFill && !needTurnover) {
+        if (built.queue.length > 0 || unscoredAll.length === 0) {
+          set({isLoadingPhotos: false, ...reviewStatsPartial()});
+        }
+        if (built.queue.length > 0) {
+          syncQueueScoreStamp();
+        }
         break;
       }
 
-      const batch = sampleRandom(unscored, AI_SCORE_BATCH);
+      if (needTurnover) {
+        const remainder = built.queue.slice(built.index);
+        const dropIds = pickLowestRemainingIds(
+          remainder,
+          scoreById,
+          AI_REFILL_DROP,
+        );
+        useAIStore.getState().clearScoresForIds(dropIds);
+        aiRefillExcludeIds = new Set(dropIds);
+
+        const freshScoreById = useAIStore.getState().scoreById;
+        let unscored = eligible.filter(
+          a =>
+            freshScoreById[a.id] === undefined &&
+            !aiRefillExcludeIds.has(a.id),
+        );
+        let batch = sampleRandom(unscored, AI_SCORE_BATCH);
+        if (batch.length < AI_SCORE_BATCH) {
+          const droppedAssets = remainder.filter(a => dropIds.includes(a.id));
+          const needMore = AI_SCORE_BATCH - batch.length;
+          const fromDropped = sampleRandom(droppedAssets, needMore);
+          batch = [...batch, ...fromDropped];
+        }
+        if (batch.length === 0) {
+          aiRefillExcludeIds = new Set();
+          set({isLoadingPhotos: false, ...reviewStatsPartial()});
+          break;
+        }
+        await useAIStore.getState().scoreAssets(batch);
+        aiRefillExcludeIds = new Set();
+        continue;
+      }
+
+      const batch = sampleRandom(unscoredAll, AI_SCORE_BATCH);
+      if (batch.length === 0) {
+        set({isLoadingPhotos: false, ...reviewStatsPartial()});
+        break;
+      }
       await useAIStore.getState().scoreAssets(batch);
     }
   } finally {
-    aiFillInFlight = false;
+    if (runId === aiFillRunId) {
+      aiFillInFlight = false;
+    }
   }
 }
 
@@ -532,10 +686,10 @@ function maybeRefillAIQueue(
   ) => void,
   get: () => QueueState,
 ): void {
-  if (currentPhotoSort !== 'ai') return;
+  if (currentPhotoSort !== 'ai' || !aiQueuePrimed) return;
   const state = get();
   const remaining = state.photoQueue.length - state.photoIndex;
-  if (remaining < AI_REFILL_THRESHOLD) {
+  if (remaining <= AI_REFILL_THRESHOLD) {
     void ensureAIQueueFilled(set, get); // eslint-disable-line no-void
   }
 }
@@ -706,6 +860,10 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       photoLoadGeneration += 1;
       currentPhotoSort = sort;
       currentPhotoFilters = photoFilters;
+      aiFillRunId += 1;
+      aiQueuePrimed = false;
+      aiRefillExcludeIds = new Set();
+      aiQueueScoreStamp = null;
       setRawCache('photo', []);
     } else {
       videoLoadController?.cancel();
@@ -944,6 +1102,10 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const loadingKey = isPhoto ? 'isLoadingPhotos' : 'isLoadingVideos';
 
     if (isPhoto && sort === 'ai') {
+      aiFillRunId += 1;
+      aiQueuePrimed = false;
+      aiRefillExcludeIds = new Set();
+      aiQueueScoreStamp = null;
       set({
         photoQueue: [],
         photoIndex: 0,
@@ -1155,8 +1317,28 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     return queue[index + 1] || null;
   },
 
+  reconcileAIScoringOnFocus: async () => {
+    if (currentPhotoSort !== 'ai') return;
+    await useAIStore.getState().refreshModelStatus();
+    if (!queueNeedsRescoreForActiveModel()) {
+      const state = get();
+      if (state.photoQueue.length === 0 && photoRawCache.length > 0) {
+        set({isLoadingPhotos: true, ...reviewStatsPartial()});
+        await ensureAIQueueFilled(set, get);
+        syncQueueScoreStamp();
+      }
+      return;
+    }
+    await rescoreCurrentAIQueue(set, get);
+  },
+
   resetAIQueue: async () => {
+    aiFillRunId += 1;
+    aiQueuePrimed = false;
+    aiRefillExcludeIds = new Set();
+    aiQueueScoreStamp = null;
     useAIStore.getState().clearScores();
+    await waitForAIFillIdle();
     if (photoRawCache.length === 0) return;
 
     if (currentPhotoSort === 'ai') {
@@ -1167,6 +1349,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         ...reviewStatsPartial(),
       });
       await ensureAIQueueFilled(set, get);
+      syncQueueScoreStamp();
       return;
     }
 

@@ -1,4 +1,5 @@
 import React, {useCallback, useEffect} from 'react';
+import {useFocusEffect} from '@react-navigation/native';
 import {
   ActivityIndicator,
   Alert,
@@ -37,6 +38,7 @@ export function PhotosScreen() {
     photoUndoStack,
     photoPendingCount,
     photoReviewStats,
+    reconcileAIScoringOnFocus,
   } = useQueueStore(
     useShallow(s => ({
       photoQueue: s.photoQueue,
@@ -53,6 +55,7 @@ export function PhotosScreen() {
       photoUndoStack: s.photoUndoStack,
       photoPendingCount: s.photoPendingCount,
       photoReviewStats: s.photoReviewStats,
+      reconcileAIScoringOnFocus: s.reconcileAIScoringOnFocus,
     })),
   );
 
@@ -90,6 +93,13 @@ export function PhotosScreen() {
       applySort('photo', photoSort);
     }
   }, [photoSort, photoFilters, dateFilter, loadQueue, applySort, applyFilters]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (photoSort !== 'ai') return;
+      void reconcileAIScoringOnFocus(); // eslint-disable-line no-void
+    }, [photoSort, reconcileAIScoringOnFocus]),
+  );
 
   const currentAsset = photoQueue[photoIndex];
   const nextAsset = photoQueue[photoIndex + 1] || null;

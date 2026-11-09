@@ -228,7 +228,6 @@ export function TrainAIScreen() {
       selectSortModel: s.selectSortModel,
     })),
   );
-  const resetAIQueue = useQueueStore(s => s.resetAIQueue);
 
   const [available, setAvailable] = useState(Platform.OS === 'ios');
   const [isTraining, setIsTraining] = useState(false);
@@ -333,16 +332,12 @@ export function TrainAIScreen() {
         const target = selectedModelRef.current;
         const state = useAIStore.getState();
         const activeId = state.activeModelInfo?.modelId;
-        const photoSort = useSettingsStore.getState().photoSort;
         setAISortModel(target);
         setAIModel(target);
         if (activeId === target) return;
         (async () => {
           try {
             await selectSortModel(target);
-            if (photoSort === 'ai') {
-              await resetAIQueue();
-            }
           } catch (e: unknown) {
             Alert.alert(
               'Model sync failed',
@@ -359,7 +354,6 @@ export function TrainAIScreen() {
       selectSortModel,
       setAISortModel,
       setAIModel,
-      resetAIQueue,
     ]),
   );
 

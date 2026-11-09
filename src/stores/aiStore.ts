@@ -24,6 +24,7 @@ interface AIState {
   refreshCheckpoints: () => Promise<void>;
   scoreAssets: (assets: MediaAsset[]) => Promise<Map<string, number>>;
   clearScores: () => void;
+  clearScoresForIds: (ids: string[]) => void;
   selectSortModel: (modelId: TrainableModelId) => Promise<void>;
   deleteCheckpoint: (modelId: string) => Promise<void>;
   resetModel: () => Promise<void>;
@@ -102,9 +103,19 @@ export const useAIStore = create<AIState>((set, get) => ({
 
   clearScores: () => set({scoreById: {}}),
 
+  clearScoresForIds: (ids: string[]) => {
+    if (ids.length === 0) return;
+    set(state => {
+      const next = {...state.scoreById};
+      for (const id of ids) {
+        delete next[id];
+      }
+      return {scoreById: next};
+    });
+  },
+
   selectSortModel: async (modelId: TrainableModelId) => {
     await loadModel(modelId);
-    get().clearScores();
     await get().refreshModelStatus();
   },
 
