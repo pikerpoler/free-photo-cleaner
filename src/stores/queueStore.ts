@@ -489,6 +489,67 @@ function filterAndSort(
   );
 }
 
+/**
+ * Rebuild the queue after a progressive page without moving the current card.
+ * Random order keeps every card already placed and only shuffles assets that
+ * were not in the queue yet, appended after them. Other modes re-sort the tail.
+ */
+function rebuildLoadedQueue(
+  currentQueue: MediaAsset[],
+  currentIndex: number,
+  raw: MediaAsset[],
+  type: MediaType,
+  sort: SortMode,
+  photoFilters?: PhotoFilters,
+  videoFilters?: VideoFilters,
+  dateFilter?: DateFilter,
+): MediaAsset[] {
+  const frozenCount = Math.min(currentIndex + 1, currentQueue.length);
+  const frozenPrefix = currentQueue.slice(0, frozenCount);
+
+  if (sort === 'random') {
+    const frozenIds = new Set(frozenPrefix.map(a => a.id));
+    const eligible = filterEligible(
+      raw,
+      type,
+      photoFilters,
+      videoFilters,
+      dateFilter,
+    );
+    const eligibleById = new Map(eligible.map(a => [a.id, a]));
+    const placed = new Set(frozenIds);
+    const keptRemainder: MediaAsset[] = [];
+    for (const asset of currentQueue.slice(frozenCount)) {
+      const fresh = eligibleById.get(asset.id);
+      if (!fresh || placed.has(asset.id)) continue;
+      placed.add(asset.id);
+      keptRemainder.push(fresh);
+    }
+    const newcomers = eligible.filter(a => !placed.has(a.id));
+    if (
+      newcomers.length === 0 &&
+      keptRemainder.length === currentQueue.length - frozenCount
+    ) {
+      return currentQueue;
+    }
+    const shuffledNew =
+      newcomers.length > 0 ? sortAssets(newcomers, 'random') : newcomers;
+    return [...frozenPrefix, ...keptRemainder, ...shuffledNew];
+  }
+
+  const frozenIds = new Set(frozenPrefix.map(a => a.id));
+  const unfrozenRaw = raw.filter(a => !frozenIds.has(a.id));
+  const remainder = filterAndSort(
+    unfrozenRaw,
+    type,
+    sort,
+    photoFilters,
+    videoFilters,
+    dateFilter,
+  );
+  return [...frozenPrefix, ...remainder];
+}
+
 function catalogDateBounds(dateFilter?: DateFilter): {
   from?: number;
   to?: number;
@@ -677,11 +738,10 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           const finalRaw = isPhoto ? photoRawCache : videoRawCache;
           const currentQueue = isPhoto ? get().photoQueue : get().videoQueue;
           const currentIndex = isPhoto ? get().photoIndex : get().videoIndex;
-          const frozenPrefix = currentQueue.slice(0, currentIndex + 1);
-          const frozenIds = new Set(frozenPrefix.map(a => a.id));
-          const unfrozenRaw = finalRaw.filter(a => !frozenIds.has(a.id));
-          const remainder = filterAndSort(
-            unfrozenRaw,
+          const queue = rebuildLoadedQueue(
+            currentQueue,
+            currentIndex,
+            finalRaw,
             type,
             currentSort,
             curPf,
@@ -689,23 +749,19 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             currentDateFilter,
           );
           set({
-            [queueKey]: [...frozenPrefix, ...remainder],
+            [queueKey]: queue,
             [loadingMoreKey]: false,
             [loadingKey]: false,
             ...reviewStatsPartial(),
           });
         } else {
-          // Intermediate: update remaining without resetting index
+          // Intermediate: keep the current card and, for random, the placed tail.
           const currentQueue = isPhoto ? get().photoQueue : get().videoQueue;
           const currentIndex = isPhoto ? get().photoIndex : get().videoIndex;
-          const frozenPrefix = currentQueue.slice(
-            0,
-            Math.min(currentIndex + 1, currentQueue.length),
-          );
-          const frozenIds = new Set(frozenPrefix.map(a => a.id));
-          const unfrozenRaw = rawCache.filter(a => !frozenIds.has(a.id));
-          const remainder = filterAndSort(
-            unfrozenRaw,
+          const queue = rebuildLoadedQueue(
+            currentQueue,
+            currentIndex,
+            rawCache,
             type,
             currentSort,
             curPf,
@@ -713,7 +769,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             currentDateFilter,
           );
           set({
-            [queueKey]: [...frozenPrefix, ...remainder],
+            [queueKey]: queue,
             [loadingMoreKey]: true,
             [loadingKey]: false,
             ...reviewStatsPartial(),
