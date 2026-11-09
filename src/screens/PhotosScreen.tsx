@@ -7,6 +7,7 @@ import {
   View,
   useColorScheme,
 } from 'react-native';
+import {useShallow} from 'zustand/react/shallow';
 import {useQueueStore} from '../stores/queueStore';
 import {useSettingsStore} from '../stores/settingsStore';
 import {useAIStore} from '../stores/aiStore';
@@ -28,6 +29,7 @@ export function PhotosScreen() {
     isLoadingPhotosMore,
     loadQueue,
     applySort,
+    applyFilters,
     swipeLeft,
     swipeRight,
     undo,
@@ -35,9 +37,32 @@ export function PhotosScreen() {
     photoUndoStack,
     photoPendingCount,
     photoReviewStats,
-  } = useQueueStore();
+  } = useQueueStore(
+    useShallow(s => ({
+      photoQueue: s.photoQueue,
+      photoIndex: s.photoIndex,
+      isLoadingPhotos: s.isLoadingPhotos,
+      isLoadingPhotosMore: s.isLoadingPhotosMore,
+      loadQueue: s.loadQueue,
+      applySort: s.applySort,
+      applyFilters: s.applyFilters,
+      swipeLeft: s.swipeLeft,
+      swipeRight: s.swipeRight,
+      undo: s.undo,
+      flushDeletes: s.flushDeletes,
+      photoUndoStack: s.photoUndoStack,
+      photoPendingCount: s.photoPendingCount,
+      photoReviewStats: s.photoReviewStats,
+    })),
+  );
 
-  const {photoSort, photoFilters, dateFilter} = useSettingsStore();
+  const {photoSort, photoFilters, dateFilter} = useSettingsStore(
+    useShallow(s => ({
+      photoSort: s.photoSort,
+      photoFilters: s.photoFilters,
+      dateFilter: s.dateFilter,
+    })),
+  );
 
   const photoFiltersRef = React.useRef(photoFilters);
   const dateFilterRef = React.useRef(dateFilter);
@@ -57,12 +82,14 @@ export function PhotosScreen() {
     photoFiltersRef.current = photoFilters;
     dateFilterRef.current = dateFilter;
 
-    if (filtersChanged || dateChanged) {
+    if (dateChanged) {
       loadQueue('photo', photoSort, photoFilters, undefined, dateFilter);
+    } else if (filtersChanged) {
+      applyFilters('photo', photoSort, photoFilters, undefined);
     } else {
       applySort('photo', photoSort);
     }
-  }, [photoSort, photoFilters, dateFilter, loadQueue, applySort]);
+  }, [photoSort, photoFilters, dateFilter, loadQueue, applySort, applyFilters]);
 
   const currentAsset = photoQueue[photoIndex];
   const nextAsset = photoQueue[photoIndex + 1] || null;

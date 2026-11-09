@@ -4,7 +4,6 @@ import {getLabeledPhotoSamples} from './database';
 import {
   deleteTrainingExample,
   getTrainingExampleMeta,
-  hasTrainingExample,
   upsertTrainingExample,
 } from './trainingDataset';
 
@@ -49,6 +48,7 @@ export async function backfillTrainingDataset(): Promise<void> {
   const live = getLabeledPhotoSamples();
   const liveById = new Map(live.map(sample => [sample.id, sample]));
   const meta = getTrainingExampleMeta();
+  const existingIds = new Set(meta.map(row => row.id));
 
   for (const row of meta) {
     if (row.schemaVersion === FEATURE_SCHEMA_VERSION) continue;
@@ -61,7 +61,7 @@ export async function backfillTrainingDataset(): Promise<void> {
   }
 
   for (const sample of live) {
-    if (hasTrainingExample(sample.id)) continue;
+    if (existingIds.has(sample.id)) continue;
     await captureAndWait(sample.id, sample.uri, sample.label);
   }
 }

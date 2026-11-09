@@ -4,6 +4,8 @@ import {LabeledSample} from '../ai/cnnTypes';
 import {getSetting, setSetting, KEYS} from './storage';
 
 let db: DB | null = null;
+let keptIdsCache: Set<string> | null = null;
+let pendingIdsCache: Set<string> | null = null;
 
 export function getDatabase(): DB {
   if (db) return db;
@@ -72,6 +74,11 @@ export function getDatabase(): DB {
   db.executeSync(`
     CREATE INDEX IF NOT EXISTS idx_swipe_decisions_type_id
     ON swipe_decisions(media_type, id DESC)
+  `);
+
+  db.executeSync(`
+    CREATE INDEX IF NOT EXISTS idx_swipe_decisions_asset
+    ON swipe_decisions(asset_id)
   `);
 
   db.executeSync(`
@@ -172,61 +179,73 @@ function maybeBackfillSwipeDecisionsFromLegacy(database: DB): void {
   setSetting(KEYS.SWIPE_DECISIONS_BACKFILL_DONE, true);
 }
 
-function mediaAssetFromCatalogOrPending(
-  database: DB,
-  assetId: string,
-  decision: SwipeDecisionType,
-  mediaType: MediaType,
-): MediaAsset | null {
-  const cat = database.executeSync('SELECT * FROM asset_catalog WHERE id = ?', [
-    assetId,
-  ]);
-  if (cat.rows.length > 0) {
-    return rowToAsset(cat.rows[0] as Record<string, unknown>);
-  }
-
-  if (decision === 'delete') {
-    const pend = database.executeSync(
-      `SELECT id, uri, filename, file_size, media_type
-       FROM pending_deletes WHERE id = ?`,
-      [assetId],
-    );
-    if (pend.rows.length === 0) {
-      return null;
-    }
-    const pr = pend.rows[0] as Record<string, unknown>;
-    return {
-      id: pr.id as string,
-      uri: pr.uri as string,
-      type: (pr.media_type as MediaType) ?? mediaType,
-      filename: (pr.filename as string) || 'unknown',
-      width: 0,
-      height: 0,
-      fileSize: (pr.file_size as number) || 0,
-      creationDate: 0,
-      hasExif: false,
-      isScreenshot: false,
-      isWhatsApp: false,
-    };
-  }
-
-  return null;
-}
-
 /** Load undo stack in chronological swipe order (oldest first) for a media type. */
 export function getPersistedUndoStack(mediaType: MediaType): PersistedUndoEntry[] {
   const database = getDatabase();
   const result = database.executeSync(
-    `SELECT asset_id, decision, media_type FROM swipe_decisions
-     WHERE media_type = ? ORDER BY id ASC`,
+    `SELECT
+       d.asset_id AS d_asset_id,
+       d.decision AS d_decision,
+       d.media_type AS d_media_type,
+       c.id AS c_id,
+       c.uri AS c_uri,
+       c.media_type AS c_media_type,
+       c.filename AS c_filename,
+       c.width AS c_width,
+       c.height AS c_height,
+       c.file_size AS c_file_size,
+       c.creation_date AS c_creation_date,
+       c.duration AS c_duration,
+       c.has_exif AS c_has_exif,
+       c.is_screenshot AS c_is_screenshot,
+       c.is_whatsapp AS c_is_whatsapp,
+       p.id AS p_id,
+       p.uri AS p_uri,
+       p.filename AS p_filename,
+       p.file_size AS p_file_size,
+       p.media_type AS p_media_type
+     FROM swipe_decisions d
+     LEFT JOIN asset_catalog c ON c.id = d.asset_id
+     LEFT JOIN pending_deletes p ON p.id = d.asset_id
+     WHERE d.media_type = ?
+     ORDER BY d.id ASC`,
     [mediaType],
   );
   const out: PersistedUndoEntry[] = [];
   for (const row of result.rows) {
-    const assetId = row.asset_id as string;
-    const decision = row.decision as SwipeDecisionType;
-    const mt = row.media_type as MediaType;
-    const asset = mediaAssetFromCatalogOrPending(database, assetId, decision, mt);
+    const decision = row.d_decision as SwipeDecisionType;
+    const mt = row.d_media_type as MediaType;
+    let asset: MediaAsset | null = null;
+    if (row.c_id != null) {
+      asset = rowToAsset({
+        id: row.c_id,
+        uri: row.c_uri,
+        media_type: row.c_media_type,
+        filename: row.c_filename,
+        width: row.c_width,
+        height: row.c_height,
+        file_size: row.c_file_size,
+        creation_date: row.c_creation_date,
+        duration: row.c_duration,
+        has_exif: row.c_has_exif,
+        is_screenshot: row.c_is_screenshot,
+        is_whatsapp: row.c_is_whatsapp,
+      });
+    } else if (decision === 'delete' && row.p_id != null) {
+      asset = {
+        id: row.p_id as string,
+        uri: row.p_uri as string,
+        type: (row.p_media_type as MediaType) ?? mt,
+        filename: (row.p_filename as string) || 'unknown',
+        width: 0,
+        height: 0,
+        fileSize: (row.p_file_size as number) || 0,
+        creationDate: 0,
+        hasExif: false,
+        isScreenshot: false,
+        isWhatsApp: false,
+      };
+    }
     if (asset) {
       out.push({type: decision, asset, queue: mt});
     }
@@ -255,6 +274,7 @@ export function markAssetKept(assetId: string, mediaType: MediaType): void {
     database.executeSync('ROLLBACK');
     throw e;
   }
+  keptIdsCache?.add(assetId);
 }
 
 export function removeAssetFromKept(assetId: string): void {
@@ -268,15 +288,18 @@ export function removeAssetFromKept(assetId: string): void {
     database.executeSync('ROLLBACK');
     throw e;
   }
+  keptIdsCache?.delete(assetId);
 }
 
-export function getKeptAssetIds(): Set<string> {
+export function getKeptAssetIds(): ReadonlySet<string> {
+  if (keptIdsCache) return keptIdsCache;
   const database = getDatabase();
   const result = database.executeSync('SELECT id FROM kept_assets');
   const ids = new Set<string>();
   for (const row of result.rows) {
     ids.add(row.id as string);
   }
+  keptIdsCache = ids;
   return ids;
 }
 
@@ -291,6 +314,7 @@ export function resetKeepHistory(): void {
     database.executeSync('ROLLBACK');
     throw e;
   }
+  keptIdsCache = new Set();
 }
 
 function clearSwipeDecisionsKeepInTx(database: DB): void {
@@ -325,6 +349,7 @@ export function addPendingDelete(
     database.executeSync('ROLLBACK');
     throw e;
   }
+  pendingIdsCache?.add(assetId);
 }
 
 export function removePendingDelete(assetId: string): void {
@@ -338,6 +363,7 @@ export function removePendingDelete(assetId: string): void {
     database.executeSync('ROLLBACK');
     throw e;
   }
+  pendingIdsCache?.delete(assetId);
 }
 
 function removeLatestSwipeDecisionForAssetInTx(database: DB, assetId: string): void {
@@ -412,13 +438,15 @@ export function getPendingDeletesByType(
   }));
 }
 
-export function getPendingDeleteIds(): Set<string> {
+export function getPendingDeleteIds(): ReadonlySet<string> {
+  if (pendingIdsCache) return pendingIdsCache;
   const database = getDatabase();
   const result = database.executeSync('SELECT id FROM pending_deletes');
   const ids = new Set<string>();
   for (const row of result.rows) {
     ids.add(row.id as string);
   }
+  pendingIdsCache = ids;
   return ids;
 }
 
@@ -437,6 +465,7 @@ export function clearPendingDeletesByType(mediaType: MediaType): void {
     database.executeSync('ROLLBACK');
     throw e;
   }
+  pendingIdsCache = null;
 }
 
 /** Kept (0) + pending-delete photos (1) for training */

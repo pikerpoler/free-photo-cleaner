@@ -75,6 +75,12 @@ interface QueueState {
     dateFilter?: DateFilter,
   ) => void;
   applySort: (type: MediaType, sort: SortMode) => void;
+  applyFilters: (
+    type: MediaType,
+    sort: SortMode,
+    photoFilters?: PhotoFilters,
+    videoFilters?: VideoFilters,
+  ) => void;
   swipeLeft: (type: MediaType) => void;
   swipeRight: (type: MediaType) => void;
   undo: (type: MediaType) => void;
@@ -90,7 +96,9 @@ let photoLoadController: ProgressiveLoadController | null = null;
 let videoLoadController: ProgressiveLoadController | null = null;
 
 let photoRawCache: MediaAsset[] = [];
+let photoRawIds = new Set<string>();
 let videoRawCache: MediaAsset[] = [];
+let videoRawIds = new Set<string>();
 
 let currentPhotoSort: SortMode = 'newest_first';
 let currentVideoSort: SortMode = 'largest_first';
@@ -118,16 +126,32 @@ function dedupeById(assets: MediaAsset[]): MediaAsset[] {
   return out;
 }
 
-function mergeUnique(existing: MediaAsset[], batch: MediaAsset[]): MediaAsset[] {
-  const seen = new Set(existing.map(a => a.id));
-  const merged = [...existing];
-  for (const a of batch) {
-    if (!seen.has(a.id)) {
-      seen.add(a.id);
-      merged.push(a);
-    }
+function setRawCache(type: MediaType, assets: MediaAsset[]): void {
+  if (type === 'photo') {
+    photoRawCache = assets;
+    photoRawIds = new Set(assets.map(a => a.id));
+  } else {
+    videoRawCache = assets;
+    videoRawIds = new Set(assets.map(a => a.id));
   }
-  return merged;
+}
+
+/** Append unseen assets. Returns how many were added. */
+function appendNewRawAssets(type: MediaType, batch: MediaAsset[]): number {
+  const ids = type === 'photo' ? photoRawIds : videoRawIds;
+  const added: MediaAsset[] = [];
+  for (const a of batch) {
+    if (ids.has(a.id)) continue;
+    ids.add(a.id);
+    added.push(a);
+  }
+  if (added.length === 0) return 0;
+  if (type === 'photo') {
+    photoRawCache = [...photoRawCache, ...added];
+  } else {
+    videoRawCache = [...videoRawCache, ...added];
+  }
+  return added.length;
 }
 
 function sortAssets(assets: MediaAsset[], mode: SortMode): MediaAsset[] {
@@ -161,6 +185,60 @@ function sampleRandom<T>(arr: T[], n: number): T[] {
   return copy.slice(0, n);
 }
 
+type MatchedCache = {
+  raw: MediaAsset[];
+  photoFilters?: PhotoFilters;
+  videoFilters?: VideoFilters;
+  dateFilter?: DateFilter;
+  result: MediaAsset[];
+};
+
+let photoMatchedCache: MatchedCache | null = null;
+let videoMatchedCache: MatchedCache | null = null;
+
+function filterMatched(
+  raw: MediaAsset[],
+  type: MediaType,
+  photoFilters?: PhotoFilters,
+  videoFilters?: VideoFilters,
+  dateFilter?: DateFilter,
+): MediaAsset[] {
+  const cache = type === 'photo' ? photoMatchedCache : videoMatchedCache;
+  if (
+    cache &&
+    cache.raw === raw &&
+    cache.photoFilters === photoFilters &&
+    cache.videoFilters === videoFilters &&
+    cache.dateFilter === dateFilter
+  ) {
+    return cache.result;
+  }
+
+  let assets = raw;
+  if (dateFilter) {
+    assets = applyDateFilter(assets, dateFilter);
+  }
+  if (type === 'photo' && photoFilters) {
+    assets = applyPhotoFilters(assets, photoFilters);
+  } else if (type === 'video' && videoFilters) {
+    assets = applyVideoFilters(assets, videoFilters);
+  }
+
+  const entry: MatchedCache = {
+    raw,
+    photoFilters,
+    videoFilters,
+    dateFilter,
+    result: assets,
+  };
+  if (type === 'photo') {
+    photoMatchedCache = entry;
+  } else {
+    videoMatchedCache = entry;
+  }
+  return assets;
+}
+
 function filterEligible(
   raw: MediaAsset[],
   type: MediaType,
@@ -168,22 +246,16 @@ function filterEligible(
   videoFilters?: VideoFilters,
   dateFilter?: DateFilter,
 ): MediaAsset[] {
+  const matched = filterMatched(
+    raw,
+    type,
+    photoFilters,
+    videoFilters,
+    dateFilter,
+  );
   const keptIds = getKeptAssetIds();
   const pendingIds = getPendingDeleteIds();
-
-  let assets = raw.filter(a => !keptIds.has(a.id) && !pendingIds.has(a.id));
-
-  if (dateFilter) {
-    assets = applyDateFilter(assets, dateFilter);
-  }
-
-  if (type === 'photo' && photoFilters) {
-    assets = applyPhotoFilters(assets, photoFilters);
-  } else if (type === 'video' && videoFilters) {
-    assets = applyVideoFilters(assets, videoFilters);
-  }
-
-  return assets;
+  return matched.filter(a => !keptIds.has(a.id) && !pendingIds.has(a.id));
 }
 
 function sumFileSizes(assets: MediaAsset[]): number {
@@ -250,10 +322,43 @@ function buildReviewAggregates(): {
   };
 }
 
-function reviewStatsPartial(): Pick<
-  QueueState,
-  'photoEligibleCount' | 'photoReviewStats' | 'videoReviewStats'
+function reviewStatsPartial(type?: MediaType): Partial<
+  Pick<
+    QueueState,
+    'photoEligibleCount' | 'photoReviewStats' | 'videoReviewStats'
+  >
 > {
+  if (type === 'photo') {
+    const photoTR = getPhotoToReviewStats();
+    const photoPend = getPendingDeleteAggregate('photo');
+    const photoKept = getKeptAggregate('photo');
+    return {
+      photoEligibleCount: photoTR.count,
+      photoReviewStats: {
+        toReviewCount: photoTR.count,
+        toReviewBytes: photoTR.totalBytes,
+        pendingDeleteCount: photoPend.count,
+        pendingDeleteBytes: photoPend.totalBytes,
+        keptCount: photoKept.count,
+        keptBytes: photoKept.totalBytes,
+      },
+    };
+  }
+  if (type === 'video') {
+    const videoTR = getVideoToReviewStats();
+    const videoPend = getPendingDeleteAggregate('video');
+    const videoKept = getKeptAggregate('video');
+    return {
+      videoReviewStats: {
+        toReviewCount: videoTR.count,
+        toReviewBytes: videoTR.totalBytes,
+        pendingDeleteCount: videoPend.count,
+        pendingDeleteBytes: videoPend.totalBytes,
+        keptCount: videoKept.count,
+        keptBytes: videoKept.totalBytes,
+      },
+    };
+  }
   return buildReviewAggregates();
 }
 
@@ -594,12 +699,12 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       photoLoadController?.cancel();
       currentPhotoSort = sort;
       currentPhotoFilters = photoFilters;
-      photoRawCache = [];
+      setRawCache('photo', []);
     } else {
       videoLoadController?.cancel();
       currentVideoSort = sort;
       currentVideoFilters = videoFilters;
-      videoRawCache = [];
+      setRawCache('video', []);
     }
     currentDateFilter = dateFilter;
 
@@ -617,11 +722,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const vf = isPhoto ? undefined : videoFilters;
 
     if (catalog.length > 0) {
-      if (isPhoto) {
-        photoRawCache = catalog;
-      } else {
-        videoRawCache = catalog;
-      }
+      setRawCache(type, catalog);
 
       if (isAI) {
         // Never paint unscored/random cards — fill from scores only.
@@ -671,11 +772,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
         upsertCatalogAssets(uniqueBatch);
 
-        if (isPhoto) {
-          photoRawCache = mergeUnique(photoRawCache, uniqueBatch);
-        } else {
-          videoRawCache = mergeUnique(videoRawCache, uniqueBatch);
-        }
+        const addedCount = appendNewRawAssets(type, uniqueBatch);
 
         const rawCache = isPhoto ? photoRawCache : videoRawCache;
         const currentSort = isPhoto ? currentPhotoSort : currentVideoSort;
@@ -691,12 +788,14 @@ export const useQueueStore = create<QueueState>((set, get) => ({
               if (type === 'photo') {
                 pruneFeatureCacheFromUris(Array.from(seenIds)).catch(() => {});
               }
-              photoRawCache = getCatalogAssets(type);
+              setRawCache('photo', getCatalogAssets(type));
             }
             set({
               isLoadingPhotosMore: false,
               ...reviewStatsPartial(),
             });
+          } else if (addedCount === 0) {
+            return;
           } else {
             set({
               isLoadingPhotosMore: true,
@@ -732,12 +831,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             if (type === 'photo') {
               pruneFeatureCacheFromUris(Array.from(seenIds)).catch(() => {});
             }
-            const refreshed = getCatalogAssets(type);
-            if (isPhoto) {
-              photoRawCache = refreshed;
-            } else {
-              videoRawCache = refreshed;
-            }
+            setRawCache(type, getCatalogAssets(type));
           }
 
           const finalRaw = isPhoto ? photoRawCache : videoRawCache;
@@ -759,6 +853,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             [loadingKey]: false,
             ...reviewStatsPartial(),
           });
+        } else if (addedCount === 0) {
+          return;
         } else {
           // Intermediate: keep the current card and, for random, the placed tail.
           const currentQueue = isPhoto ? get().photoQueue : get().videoQueue;
@@ -791,6 +887,15 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     }
   },
 
+  applyFilters: (type, sort, photoFilters, videoFilters) => {
+    if (type === 'photo') {
+      currentPhotoFilters = photoFilters;
+    } else {
+      currentVideoFilters = videoFilters;
+    }
+    get().applySort(type, sort);
+  },
+
   applySort: (type: MediaType, sort: SortMode) => {
     const isPhoto = type === 'photo';
     const rawCache = isPhoto ? photoRawCache : videoRawCache;
@@ -805,6 +910,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
     const queueKey = isPhoto ? 'photoQueue' : 'videoQueue';
     const indexKey = isPhoto ? 'photoIndex' : 'videoIndex';
+    const loadingKey = isPhoto ? 'isLoadingPhotos' : 'isLoadingVideos';
 
     if (isPhoto && sort === 'ai') {
       set({
@@ -831,7 +937,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     set({
       [queueKey]: queue,
       [indexKey]: 0,
-      isLoadingPhotos: false,
+      [loadingKey]: false,
       ...reviewStatsPartial(),
     });
   },
@@ -865,7 +971,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       [indexKey]: index + 1,
       [countKey]: currentCount + 1,
       [stackKey]: [...currentStack, {type: 'delete', asset, queue: type}],
-      ...reviewStatsPartial(),
+      ...reviewStatsPartial(type),
     });
 
     if (type === 'photo') {
@@ -892,7 +998,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     set({
       [indexKey]: index + 1,
       [stackKey]: [...currentStack, {type: 'keep', asset, queue: type}],
-      ...reviewStatsPartial(),
+      ...reviewStatsPartial(type),
     });
 
     if (type === 'photo') {
@@ -932,12 +1038,12 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         set({
           [countKey]: 0,
           [stackKey]: [],
-          ...reviewStatsPartial(),
+          ...reviewStatsPartial(type),
         });
       } else {
         set({
           [countKey]: getPendingDeletesByType(type).length,
-          ...reviewStatsPartial(),
+          ...reviewStatsPartial(type),
         });
       }
     } else {
@@ -955,12 +1061,12 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         set({
           [countKey]: 0,
           [stackKey]: [],
-          ...reviewStatsPartial(),
+          ...reviewStatsPartial(type),
         });
       } else {
         set({
           [countKey]: getPendingDeletesByType(type).length,
-          ...reviewStatsPartial(),
+          ...reviewStatsPartial(type),
         });
       }
     }
@@ -1000,7 +1106,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       ...(lastEntry.type === 'delete'
         ? {[countKey]: Math.max(0, currentCount - 1)}
         : {}),
-      ...reviewStatsPartial(),
+      ...reviewStatsPartial(type),
     });
   },
 

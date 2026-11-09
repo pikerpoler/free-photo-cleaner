@@ -327,9 +327,25 @@ enum PhotoFeatures {
 
   /// `ph://` URIs from RN — removes cached `.bin` for each photo.
   static func deleteCachedFeatures(photoUris: [String]) {
+    var targetSafe = Set<String>()
+    targetSafe.reserveCapacity(photoUris.count)
     for uri in photoUris {
       guard let lid = localIdentifier(from: uri) else { continue }
-      deleteCachedFeatures(localId: lid)
+      targetSafe.insert(lid.replacingOccurrences(of: "/", with: "_"))
+    }
+    guard !targetSafe.isEmpty else { return }
+    let fm = FileManager.default
+    let dir = featureCacheDir
+    guard let urls = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+    for fileURL in urls {
+      let name = fileURL.lastPathComponent
+      guard name.hasSuffix(".bin") else { continue }
+      let base = (name as NSString).deletingPathExtension
+      guard let u = base.lastIndex(of: "_") else { continue }
+      let idPart = String(base[..<u])
+      if targetSafe.contains(idPart) {
+        try? fm.removeItem(at: fileURL)
+      }
     }
   }
 

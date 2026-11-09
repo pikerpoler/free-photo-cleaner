@@ -17,6 +17,7 @@ import Slider from '@react-native-community/slider';
 import DateTimePicker, {
   DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
+import {useShallow} from 'zustand/react/shallow';
 import {useSettingsStore} from '../stores/settingsStore';
 import {useAIStore} from '../stores/aiStore';
 import {useQueueStore} from '../stores/queueStore';
@@ -101,7 +102,23 @@ export function SettingsScreen() {
     setVideoFilters,
     setDateFilter,
     setAIModel,
-  } = useSettingsStore();
+    setAISortModel,
+  } = useSettingsStore(
+    useShallow(s => ({
+      photoSort: s.photoSort,
+      videoSort: s.videoSort,
+      photoFilters: s.photoFilters,
+      videoFilters: s.videoFilters,
+      dateFilter: s.dateFilter,
+      setPhotoSort: s.setPhotoSort,
+      setVideoSort: s.setVideoSort,
+      setPhotoFilters: s.setPhotoFilters,
+      setVideoFilters: s.setVideoFilters,
+      setDateFilter: s.setDateFilter,
+      setAIModel: s.setAIModel,
+      setAISortModel: s.setAISortModel,
+    })),
+  );
 
   const {
     hasModel,
@@ -111,10 +128,19 @@ export function SettingsScreen() {
     checkpoints,
     selectSortModel,
     deleteCheckpoint,
-  } = useAIStore();
+  } = useAIStore(
+    useShallow(s => ({
+      hasModel: s.hasModel,
+      activeModelInfo: s.activeModelInfo,
+      refreshModelStatus: s.refreshModelStatus,
+      refreshCheckpoints: s.refreshCheckpoints,
+      checkpoints: s.checkpoints,
+      selectSortModel: s.selectSortModel,
+      deleteCheckpoint: s.deleteCheckpoint,
+    })),
+  );
   const resetAIQueue = useQueueStore(s => s.resetAIQueue);
   const onKeepHistoryReset = useQueueStore(s => s.onKeepHistoryReset);
-  const setAISortModel = useSettingsStore(s => s.setAISortModel);
 
   const [showFromPicker, setShowFromPicker] = useState(false);
   const [showToPicker, setShowToPicker] = useState(false);

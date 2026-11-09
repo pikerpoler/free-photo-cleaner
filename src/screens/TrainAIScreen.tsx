@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import {useFocusEffect} from '@react-navigation/native';
+import {useShallow} from 'zustand/react/shallow';
 import {useSettingsStore} from '../stores/settingsStore';
 import {useAIStore} from '../stores/aiStore';
 import {useQueueStore} from '../stores/queueStore';
@@ -180,14 +181,53 @@ export function TrainAIScreen() {
     setAICatboostMinLeaf,
     setAICatboostMaxNewTrees,
     setAISortModel,
-  } = useSettingsStore();
+  } = useSettingsStore(
+    useShallow(s => ({
+      aiModel: s.aiModel,
+      setAIModel: s.setAIModel,
+      aiBatchSize: s.aiBatchSize,
+      aiStepSize: s.aiStepSize,
+      aiEpochs: s.aiEpochs,
+      aiLrScheduler: s.aiLrScheduler,
+      aiStepGamma: s.aiStepGamma,
+      aiStepSizeEpochs: s.aiStepSizeEpochs,
+      aiExpDecay: s.aiExpDecay,
+      aiLogisticC: s.aiLogisticC,
+      aiLogisticMaxIter: s.aiLogisticMaxIter,
+      aiCatboostLearningRate: s.aiCatboostLearningRate,
+      aiCatboostDepth: s.aiCatboostDepth,
+      aiCatboostMinLeaf: s.aiCatboostMinLeaf,
+      aiCatboostMaxNewTrees: s.aiCatboostMaxNewTrees,
+      setAIBatchSize: s.setAIBatchSize,
+      setAIStepSize: s.setAIStepSize,
+      setAIEpochs: s.setAIEpochs,
+      setAILrScheduler: s.setAILrScheduler,
+      setAIStepGamma: s.setAIStepGamma,
+      setAIStepSizeEpochs: s.setAIStepSizeEpochs,
+      setAIExpDecay: s.setAIExpDecay,
+      setAILogisticC: s.setAILogisticC,
+      setAILogisticMaxIter: s.setAILogisticMaxIter,
+      setAICatboostLearningRate: s.setAICatboostLearningRate,
+      setAICatboostDepth: s.setAICatboostDepth,
+      setAICatboostMinLeaf: s.setAICatboostMinLeaf,
+      setAICatboostMaxNewTrees: s.setAICatboostMaxNewTrees,
+      setAISortModel: s.setAISortModel,
+    })),
+  );
 
   const {
     refreshModelStatus,
     activeModelInfo,
     hasModel,
     selectSortModel,
-  } = useAIStore();
+  } = useAIStore(
+    useShallow(s => ({
+      refreshModelStatus: s.refreshModelStatus,
+      activeModelInfo: s.activeModelInfo,
+      hasModel: s.hasModel,
+      selectSortModel: s.selectSortModel,
+    })),
+  );
   const resetAIQueue = useQueueStore(s => s.resetAIQueue);
 
   const [available, setAvailable] = useState(Platform.OS === 'ios');

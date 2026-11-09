@@ -7,6 +7,7 @@ import {
   View,
   useColorScheme,
 } from 'react-native';
+import {useShallow} from 'zustand/react/shallow';
 import {useQueueStore} from '../stores/queueStore';
 import {useSettingsStore} from '../stores/settingsStore';
 import {SwipeCard} from '../components/SwipeCard';
@@ -28,6 +29,7 @@ export function VideosScreen() {
     isLoadingVideosMore,
     loadQueue,
     applySort,
+    applyFilters,
     swipeLeft,
     swipeRight,
     undo,
@@ -35,9 +37,32 @@ export function VideosScreen() {
     videoUndoStack,
     videoPendingCount,
     videoReviewStats,
-  } = useQueueStore();
+  } = useQueueStore(
+    useShallow(s => ({
+      videoQueue: s.videoQueue,
+      videoIndex: s.videoIndex,
+      isLoadingVideos: s.isLoadingVideos,
+      isLoadingVideosMore: s.isLoadingVideosMore,
+      loadQueue: s.loadQueue,
+      applySort: s.applySort,
+      applyFilters: s.applyFilters,
+      swipeLeft: s.swipeLeft,
+      swipeRight: s.swipeRight,
+      undo: s.undo,
+      flushDeletes: s.flushDeletes,
+      videoUndoStack: s.videoUndoStack,
+      videoPendingCount: s.videoPendingCount,
+      videoReviewStats: s.videoReviewStats,
+    })),
+  );
 
-  const {videoSort, videoFilters, dateFilter} = useSettingsStore();
+  const {videoSort, videoFilters, dateFilter} = useSettingsStore(
+    useShallow(s => ({
+      videoSort: s.videoSort,
+      videoFilters: s.videoFilters,
+      dateFilter: s.dateFilter,
+    })),
+  );
   const [videosMuted, setVideosMuted] = useState(true);
   const toggleVideoMute = useCallback(() => {
     setVideosMuted(prev => !prev);
@@ -61,12 +86,14 @@ export function VideosScreen() {
     videoFiltersRef.current = videoFilters;
     dateFilterRef.current = dateFilter;
 
-    if (filtersChanged || dateChanged) {
+    if (dateChanged) {
       loadQueue('video', videoSort, undefined, videoFilters, dateFilter);
+    } else if (filtersChanged) {
+      applyFilters('video', videoSort, undefined, videoFilters);
     } else {
       applySort('video', videoSort);
     }
-  }, [videoSort, videoFilters, dateFilter, loadQueue, applySort]);
+  }, [videoSort, videoFilters, dateFilter, loadQueue, applySort, applyFilters]);
 
   const currentAsset = videoQueue[videoIndex];
   const nextAsset = videoQueue[videoIndex + 1] || null;
