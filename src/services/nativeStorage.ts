@@ -79,6 +79,28 @@ export function invalidateStorageCache(): void {
   cacheTimestamp = 0;
 }
 
+/**
+ * Whether each photo URI's original file is on-device.
+ * Android and failures resolve to all-true so nothing is hidden by accident.
+ */
+export async function getLocallyAvailable(uris: string[]): Promise<boolean[]> {
+  if (uris.length === 0) return [];
+  if (Platform.OS !== 'ios' || !StorageInfoModule?.locallyAvailable) {
+    return uris.map(() => true);
+  }
+  try {
+    const result = (await StorageInfoModule.locallyAvailable(uris)) as boolean[];
+    if (!Array.isArray(result)) return uris.map(() => true);
+    return uris.map((_, i) => result[i] !== false);
+  } catch (error: unknown) {
+    console.warn(
+      '[FreePhotoCleaner] locallyAvailable failed:',
+      error instanceof Error ? error.message : String(error),
+    );
+    return uris.map(() => true);
+  }
+}
+
 export async function batchDeleteAssets(uris: string[]): Promise<{success: boolean; deletedCount: number}> {
   if (uris.length === 0) {
     return {success: true, deletedCount: 0};

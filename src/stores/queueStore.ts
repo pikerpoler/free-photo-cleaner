@@ -12,6 +12,8 @@ import {
   loadMediaProgressively,
   deleteAsset,
   ProgressiveLoadController,
+  stampLocalAvailability,
+  applyCachedLocalFlags,
 } from '../services/media';
 import {batchDeleteAssets} from '../services/nativeStorage';
 import {
@@ -94,6 +96,7 @@ interface QueueState {
 
 let photoLoadController: ProgressiveLoadController | null = null;
 let videoLoadController: ProgressiveLoadController | null = null;
+let photoLoadGeneration = 0;
 
 let photoRawCache: MediaAsset[] = [];
 let photoRawIds = new Set<string>();
@@ -557,9 +560,13 @@ function applyPhotoFilters(
   assets: MediaAsset[],
   filters: PhotoFilters,
 ): MediaAsset[] {
-  if (filters.mode === 'all') return assets;
+  const withoutICloud = filters.includeICloud
+    ? assets
+    : assets.filter(asset => asset.isLocal !== false);
 
-  return assets.filter(asset => {
+  if (filters.mode === 'all') return withoutICloud;
+
+  return withoutICloud.filter(asset => {
     if (filters.screenshots && asset.isScreenshot) return true;
     if (filters.whatsapp && asset.isWhatsApp) return true;
     if (filters.noMetadata && !asset.hasExif) return true;
@@ -693,10 +700,10 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   loadQueue: (type, sort, photoFilters, videoFilters, dateFilter) => {
     const isPhoto = type === 'photo';
-    const isAI = isPhoto && sort === 'ai';
 
     if (isPhoto) {
       photoLoadController?.cancel();
+      photoLoadGeneration += 1;
       currentPhotoSort = sort;
       currentPhotoFilters = photoFilters;
       setRawCache('photo', []);
@@ -715,175 +722,199 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const queueKey = isPhoto ? 'photoQueue' : 'videoQueue';
     const indexKey = isPhoto ? 'photoIndex' : 'videoIndex';
 
-    // Hydrate instantly from catalog when available
     const bounds = catalogDateBounds(dateFilter);
     const catalog = getCatalogAssets(type, bounds.from, bounds.to);
-    const pf = isPhoto ? photoFilters : undefined;
-    const vf = isPhoto ? undefined : videoFilters;
+    const generation = isPhoto ? photoLoadGeneration : 0;
 
-    if (catalog.length > 0) {
-      setRawCache(type, catalog);
+    const startScan = (hydrated: MediaAsset[]) => {
+      if (isPhoto && generation !== photoLoadGeneration) return;
 
-      if (isAI) {
-        // Never paint unscored/random cards — fill from scores only.
-        set({
-          photoQueue: [],
-          photoIndex: 0,
-          isLoadingPhotos: true,
-          isLoadingPhotosMore: true,
-          ...reviewStatsPartial(),
-        });
-        void ensureAIQueueFilled(set, get); // eslint-disable-line no-void
-      } else {
-        const queue = filterAndSort(
-          catalog,
-          type,
-          sort,
-          pf,
-          vf,
-          dateFilter,
-        );
-        set({
-          [queueKey]: queue,
-          [indexKey]: 0,
-          [loadingKey]: false,
-          [loadingMoreKey]: true,
-          ...reviewStatsPartial(),
-        });
-      }
-    } else {
-      set({
-        [queueKey]: [],
-        [indexKey]: 0,
-        [loadingKey]: true,
-        [loadingMoreKey]: false,
-        ...reviewStatsPartial(),
-      });
-    }
+      if (hydrated.length > 0) {
+        setRawCache(type, hydrated);
 
-    let isFirstBatch = catalog.length === 0;
-    const seenIds = new Set<string>();
-
-    const controller = loadMediaProgressively(
-      type,
-      (batch, done) => {
-        const uniqueBatch = dedupeById(batch);
-        for (const a of uniqueBatch) seenIds.add(a.id);
-
-        upsertCatalogAssets(uniqueBatch);
-
-        const addedCount = appendNewRawAssets(type, uniqueBatch);
-
-        const rawCache = isPhoto ? photoRawCache : videoRawCache;
-        const currentSort = isPhoto ? currentPhotoSort : currentVideoSort;
-        const curPf = isPhoto ? currentPhotoFilters : undefined;
-        const curVf = isPhoto ? undefined : currentVideoFilters;
-        const aiMode = isPhoto && currentSort === 'ai';
-
-        if (aiMode) {
-          // Catalog/rawCache only — never shuffle unscored into photoQueue.
-          if (done) {
-            if (!currentDateFilter?.enabled) {
-              pruneCatalogToIds(type, seenIds);
-              if (type === 'photo') {
-                pruneFeatureCacheFromUris(Array.from(seenIds)).catch(() => {});
-              }
-              setRawCache('photo', getCatalogAssets(type));
-            }
-            set({
-              isLoadingPhotosMore: false,
-              ...reviewStatsPartial(),
-            });
-          } else if (addedCount === 0) {
-            return;
-          } else {
-            set({
-              isLoadingPhotosMore: true,
-              ...reviewStatsPartial(),
-            });
-          }
+        if (isPhoto && currentPhotoSort === 'ai') {
+          // Never paint unscored/random cards — fill from scores only.
+          set({
+            photoQueue: [],
+            photoIndex: 0,
+            isLoadingPhotos: true,
+            isLoadingPhotosMore: true,
+            ...reviewStatsPartial(),
+          });
           void ensureAIQueueFilled(set, get); // eslint-disable-line no-void
-          return;
-        }
-
-        if (isFirstBatch) {
-          isFirstBatch = false;
+        } else {
           const queue = filterAndSort(
-            rawCache,
+            hydrated,
             type,
-            currentSort,
-            curPf,
-            curVf,
+            isPhoto ? currentPhotoSort : currentVideoSort,
+            isPhoto ? currentPhotoFilters : undefined,
+            isPhoto ? undefined : currentVideoFilters,
             currentDateFilter,
           );
           set({
             [queueKey]: queue,
             [indexKey]: 0,
             [loadingKey]: false,
-            [loadingMoreKey]: !done,
-            ...reviewStatsPartial(),
-          });
-        } else if (done) {
-          // Full library sync without date filter on CameraRoll when catalog warm
-          // — still prune using all seen IDs from this sync pass
-          if (!currentDateFilter?.enabled) {
-            pruneCatalogToIds(type, seenIds);
-            if (type === 'photo') {
-              pruneFeatureCacheFromUris(Array.from(seenIds)).catch(() => {});
-            }
-            setRawCache(type, getCatalogAssets(type));
-          }
-
-          const finalRaw = isPhoto ? photoRawCache : videoRawCache;
-          const currentQueue = isPhoto ? get().photoQueue : get().videoQueue;
-          const currentIndex = isPhoto ? get().photoIndex : get().videoIndex;
-          const queue = rebuildLoadedQueue(
-            currentQueue,
-            currentIndex,
-            finalRaw,
-            type,
-            currentSort,
-            curPf,
-            curVf,
-            currentDateFilter,
-          );
-          set({
-            [queueKey]: queue,
-            [loadingMoreKey]: false,
-            [loadingKey]: false,
-            ...reviewStatsPartial(),
-          });
-        } else if (addedCount === 0) {
-          return;
-        } else {
-          // Intermediate: keep the current card and, for random, the placed tail.
-          const currentQueue = isPhoto ? get().photoQueue : get().videoQueue;
-          const currentIndex = isPhoto ? get().photoIndex : get().videoIndex;
-          const queue = rebuildLoadedQueue(
-            currentQueue,
-            currentIndex,
-            rawCache,
-            type,
-            currentSort,
-            curPf,
-            curVf,
-            currentDateFilter,
-          );
-          set({
-            [queueKey]: queue,
             [loadingMoreKey]: true,
-            [loadingKey]: false,
             ...reviewStatsPartial(),
           });
         }
-      },
-      dateFilter,
-    );
+      } else {
+        set({
+          [queueKey]: [],
+          [indexKey]: 0,
+          [loadingKey]: true,
+          [loadingMoreKey]: false,
+          ...reviewStatsPartial(),
+        });
+      }
 
-    if (isPhoto) {
-      photoLoadController = controller;
+      beginProgressiveLoad(hydrated.length === 0);
+    };
+
+    const beginProgressiveLoad = (isFirstBatchStart: boolean) => {
+      let isFirstBatch = isFirstBatchStart;
+      const seenIds = new Set<string>();
+
+      const controller = loadMediaProgressively(
+        type,
+        (batch, done) => {
+          const uniqueBatch = dedupeById(batch);
+          for (const a of uniqueBatch) seenIds.add(a.id);
+
+          upsertCatalogAssets(uniqueBatch);
+
+          const addedCount = appendNewRawAssets(type, uniqueBatch);
+
+          const rawCache = isPhoto ? photoRawCache : videoRawCache;
+          const currentSort = isPhoto ? currentPhotoSort : currentVideoSort;
+          const curPf = isPhoto ? currentPhotoFilters : undefined;
+          const curVf = isPhoto ? undefined : currentVideoFilters;
+          const aiMode = isPhoto && currentSort === 'ai';
+
+          if (aiMode) {
+            // Catalog/rawCache only — never shuffle unscored into photoQueue.
+            if (done) {
+              if (!currentDateFilter?.enabled) {
+                pruneCatalogToIds(type, seenIds);
+                if (type === 'photo') {
+                  pruneFeatureCacheFromUris(Array.from(seenIds)).catch(() => {});
+                }
+                setRawCache(
+                  'photo',
+                  applyCachedLocalFlags(getCatalogAssets(type)),
+                );
+              }
+              set({
+                isLoadingPhotosMore: false,
+                ...reviewStatsPartial(),
+              });
+            } else if (addedCount === 0) {
+              return;
+            } else {
+              set({
+                isLoadingPhotosMore: true,
+                ...reviewStatsPartial(),
+              });
+            }
+            void ensureAIQueueFilled(set, get); // eslint-disable-line no-void
+            return;
+          }
+
+          if (isFirstBatch) {
+            isFirstBatch = false;
+            const queue = filterAndSort(
+              rawCache,
+              type,
+              currentSort,
+              curPf,
+              curVf,
+              currentDateFilter,
+            );
+            set({
+              [queueKey]: queue,
+              [indexKey]: 0,
+              [loadingKey]: false,
+              [loadingMoreKey]: !done,
+              ...reviewStatsPartial(),
+            });
+          } else if (done) {
+            // Full library sync without date filter on CameraRoll when catalog warm
+            // — still prune using all seen IDs from this sync pass
+            if (!currentDateFilter?.enabled) {
+              pruneCatalogToIds(type, seenIds);
+              if (type === 'photo') {
+                pruneFeatureCacheFromUris(Array.from(seenIds)).catch(() => {});
+              }
+              setRawCache(type, applyCachedLocalFlags(getCatalogAssets(type)));
+            }
+
+            const finalRaw = isPhoto ? photoRawCache : videoRawCache;
+            const currentQueue = isPhoto ? get().photoQueue : get().videoQueue;
+            const currentIndex = isPhoto ? get().photoIndex : get().videoIndex;
+            const queue = rebuildLoadedQueue(
+              currentQueue,
+              currentIndex,
+              finalRaw,
+              type,
+              currentSort,
+              curPf,
+              curVf,
+              currentDateFilter,
+            );
+            set({
+              [queueKey]: queue,
+              [loadingMoreKey]: false,
+              [loadingKey]: false,
+              ...reviewStatsPartial(),
+            });
+          } else if (addedCount === 0) {
+            return;
+          } else {
+            // Intermediate: keep the current card and, for random, the placed tail.
+            const currentQueue = isPhoto ? get().photoQueue : get().videoQueue;
+            const currentIndex = isPhoto ? get().photoIndex : get().videoIndex;
+            const queue = rebuildLoadedQueue(
+              currentQueue,
+              currentIndex,
+              rawCache,
+              type,
+              currentSort,
+              curPf,
+              curVf,
+              currentDateFilter,
+            );
+            set({
+              [queueKey]: queue,
+              [loadingMoreKey]: true,
+              [loadingKey]: false,
+              ...reviewStatsPartial(),
+            });
+          }
+        },
+        dateFilter,
+      );
+
+      if (isPhoto) {
+        photoLoadController = controller;
+      } else {
+        videoLoadController = controller;
+      }
+    };
+
+    if (isPhoto && catalog.length > 0) {
+      set({
+        photoQueue: [],
+        photoIndex: 0,
+        isLoadingPhotos: true,
+        isLoadingPhotosMore: true,
+        ...reviewStatsPartial(),
+      });
+      void stampLocalAvailability(catalog).then(stamped => { // eslint-disable-line no-void
+        startScan(stamped);
+      });
     } else {
-      videoLoadController = controller;
+      startScan(catalog);
     }
   },
 

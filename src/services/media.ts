@@ -4,8 +4,12 @@ import {
   PhotoIdentifier,
 } from '@react-native-camera-roll/camera-roll';
 import {DateFilter, MediaAsset, MediaType} from '../types/media';
+import {getLocallyAvailable} from './nativeStorage';
 
 const BATCH_SIZE = 100;
+const LOCAL_CHECK_CHUNK = 200;
+
+const localFlagById = new Map<string, boolean>();
 
 function detectScreenshot(asset: PhotoIdentifier): boolean {
   const filename = asset.node.image.filename || '';
@@ -89,8 +93,8 @@ export async function fetchMediaAssets(
     ...(toTime != null ? {toTime} : {}),
   });
 
-  const assets = result.edges.map(edge =>
-    photoIdentifierToMediaAsset(edge, type),
+  const assets = await stampLocalAvailability(
+    result.edges.map(edge => photoIdentifierToMediaAsset(edge, type)),
   );
 
   return {
@@ -98,6 +102,74 @@ export async function fetchMediaAssets(
     endCursor: result.page_info.end_cursor,
     hasMore: result.page_info.has_next_page,
   };
+}
+
+function rememberLocalFlags(assets: MediaAsset[]): void {
+  for (const asset of assets) {
+    if (asset.isLocal !== undefined) {
+      localFlagById.set(asset.id, asset.isLocal);
+    }
+  }
+}
+
+/** Re-apply in-memory isLocal flags after catalog rows are reloaded from SQLite. */
+export function applyCachedLocalFlags(assets: MediaAsset[]): MediaAsset[] {
+  if (localFlagById.size === 0) return assets;
+  return assets.map(asset => {
+    if (asset.isLocal !== undefined) return asset;
+    const known = localFlagById.get(asset.id);
+    return known === undefined ? asset : {...asset, isLocal: known};
+  });
+}
+
+/**
+ * Stamp isLocal on iOS photos. Videos and Android assets are treated as local.
+ * Already-stamped assets are left unchanged. Failures leave isLocal undefined
+ * so those photos stay visible.
+ */
+export async function stampLocalAvailability(
+  assets: MediaAsset[],
+): Promise<MediaAsset[]> {
+  if (assets.length === 0) return assets;
+
+  if (Platform.OS !== 'ios') {
+    const stamped = assets.map(asset =>
+      asset.isLocal === undefined ? {...asset, isLocal: true} : asset,
+    );
+    rememberLocalFlags(stamped);
+    return stamped;
+  }
+
+  const pending = assets.filter(
+    asset => asset.type === 'photo' && asset.isLocal === undefined,
+  );
+  if (pending.length === 0) {
+    rememberLocalFlags(assets);
+    return assets;
+  }
+
+  const localById = new Map<string, boolean>();
+  try {
+    for (let i = 0; i < pending.length; i += LOCAL_CHECK_CHUNK) {
+      const chunk = pending.slice(i, i + LOCAL_CHECK_CHUNK);
+      const flags = await getLocallyAvailable(chunk.map(asset => asset.uri));
+      chunk.forEach((asset, index) => {
+        localById.set(asset.id, flags[index] !== false);
+      });
+    }
+  } catch {
+    rememberLocalFlags(assets);
+    return assets;
+  }
+
+  const stamped = assets.map(asset => {
+    if (asset.isLocal !== undefined) return asset;
+    if (asset.type !== 'photo') return {...asset, isLocal: true};
+    const local = localById.get(asset.id);
+    return local === undefined ? asset : {...asset, isLocal: local};
+  });
+  rememberLocalFlags(stamped);
+  return stamped;
 }
 
 export interface ProgressiveLoadController {

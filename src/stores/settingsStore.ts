@@ -93,6 +93,7 @@ const DEFAULT_PHOTO_FILTERS: PhotoFilters = {
   screenshots: true,
   whatsapp: true,
   noMetadata: true,
+  includeICloud: false,
 };
 
 const DEFAULT_VIDEO_FILTERS: VideoFilters = {
@@ -262,7 +263,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({
       photoSort: getSetting(KEYS.PHOTO_SORT, 'newest_first' as SortMode),
       videoSort: getSetting(KEYS.VIDEO_SORT, 'largest_first' as SortMode),
-      photoFilters: getSetting(KEYS.PHOTO_FILTERS, DEFAULT_PHOTO_FILTERS),
+      photoFilters: {
+        ...DEFAULT_PHOTO_FILTERS,
+        ...getSetting(KEYS.PHOTO_FILTERS, DEFAULT_PHOTO_FILTERS),
+      },
       videoFilters: getSetting(KEYS.VIDEO_FILTERS, DEFAULT_VIDEO_FILTERS),
       dateFilter: getSetting(KEYS.DATE_FILTER, getDefaultDateFilter()),
       theme: getSetting(KEYS.THEME, 'system' as const),

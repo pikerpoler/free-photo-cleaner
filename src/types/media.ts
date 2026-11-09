@@ -25,6 +25,8 @@ export interface MediaAsset {
   hasExif: boolean;
   isScreenshot: boolean;
   isWhatsApp: boolean;
+  /** false = original is not on device (iCloud-only). undefined = not checked yet. */
+  isLocal?: boolean;
 }
 
 export interface PhotoFilters {
@@ -32,6 +34,8 @@ export interface PhotoFilters {
   screenshots: boolean;
   whatsapp: boolean;
   noMetadata: boolean;
+  /** When false, photos whose original is only in iCloud are excluded. */
+  includeICloud: boolean;
 }
 
 export interface VideoFilters {

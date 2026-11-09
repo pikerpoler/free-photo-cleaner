@@ -65,6 +65,67 @@ class StorageInfoModule: NSObject {
     }
   }
 
+  /// Returns a Bool per URI: true if the original resource is on-device.
+  /// Missing assets and a missing `locallyAvailable` key are treated as local
+  /// so a Photos/iOS change cannot hide the whole library.
+  @objc
+  func locallyAvailable(_ uris: [String],
+                        resolve: @escaping RCTPromiseResolveBlock,
+                        rejecter reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.global(qos: .userInitiated).async {
+      if uris.isEmpty {
+        resolve([])
+        return
+      }
+
+      var results = [Bool](repeating: true, count: uris.count)
+      var identifierToIndexes: [String: [Int]] = [:]
+      var localIdentifiers: [String] = []
+      localIdentifiers.reserveCapacity(uris.count)
+
+      for (index, uri) in uris.enumerated() {
+        let identifier: String
+        if uri.hasPrefix("ph://") {
+          identifier = String(uri.dropFirst(5))
+        } else {
+          identifier = uri
+        }
+        localIdentifiers.append(identifier)
+        identifierToIndexes[identifier, default: []].append(index)
+      }
+
+      let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers, options: nil)
+      fetchResult.enumerateObjects { asset, _, _ in
+        guard let indexes = identifierToIndexes[asset.localIdentifier] else { return }
+        let available = self.isOriginalLocallyAvailable(asset)
+        for index in indexes {
+          results[index] = available
+        }
+      }
+
+      resolve(results)
+    }
+  }
+
+  private func isOriginalLocallyAvailable(_ asset: PHAsset) -> Bool {
+    let resources = PHAssetResource.assetResources(for: asset)
+    let original =
+      resources.first(where: { $0.type == .photo }) ??
+      resources.first(where: { $0.type == .fullSizePhoto }) ??
+      resources.first(where: { $0.type == .video }) ??
+      resources.first(where: { $0.type == .fullSizeVideo }) ??
+      resources.first
+    guard let original else { return true }
+
+    if let available = original.value(forKey: "locallyAvailable") as? Bool {
+      return available
+    }
+    if let number = original.value(forKey: "locallyAvailable") as? NSNumber {
+      return number.boolValue
+    }
+    return true
+  }
+
   private func estimateTotalSize(fetchResult: PHFetchResult<PHAsset>, sampleCount: Int) -> Int64 {
     let totalCount = fetchResult.count
     guard totalCount > 0 else { return 0 }

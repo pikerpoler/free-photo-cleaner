@@ -453,6 +453,21 @@ export function SettingsScreen() {
             trackColor={{false: isDark ? '#39393D' : '#e9e9ea', true: '#34C759'}}
           />
         </View>
+        {Platform.OS === 'ios' && (
+          <View style={[styles.row, isDark && styles.rowDark]}>
+            <Text style={[styles.label, isDark && styles.textDark]}>
+              iCloud Photos
+            </Text>
+            <Switch
+              value={photoFilters.includeICloud}
+              onValueChange={v => setPhotoFilters({includeICloud: v})}
+              trackColor={{
+                false: isDark ? '#39393D' : '#e9e9ea',
+                true: '#34C759',
+              }}
+            />
+          </View>
+        )}
         {photoFilters.mode === 'categories' && (
           <>
             <View style={[styles.row, isDark && styles.rowDark]}>
