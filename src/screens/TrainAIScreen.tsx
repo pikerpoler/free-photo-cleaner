@@ -406,7 +406,7 @@ export function TrainAIScreen() {
   const explainDataset = useCallback(() => {
     Alert.alert(
       'Train locally',
-      'The images are passed through a feature extractor and fed into AI models to be trained locally. Nothing is uploaded. Older devices may experience slower training.\n\nEach train rebuilds the selected model on every saved swipe: 80% to learn, 20% to score accuracy and F1. The current model stays until that run finishes. Feature vectors are kept even after photos are deleted.',
+      'The images are passed through a feature extractor and fed into AI models to be trained locally. Nothing is uploaded. Older devices may experience slower training.\n\nEach train rebuilds the selected model on every saved swipe: 80% to learn, 20% to score accuracy and F1. Feature vectors are kept even after photos are deleted.',
     );
   }, []);
 

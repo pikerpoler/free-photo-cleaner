@@ -23,7 +23,6 @@ import {useAIStore} from '../stores/aiStore';
 import {useQueueStore} from '../stores/queueStore';
 import {resetKeepHistory} from '../services/database';
 import {SortMode} from '../types/media';
-import {TrainableModelId, TRAINABLE_MODELS} from '../ai/cnnTypes';
 import {formatFileSize, formatDuration} from '../utils/format';
 
 const SORT_OPTIONS: {label: string; value: SortMode}[] = [
@@ -101,8 +100,6 @@ export function SettingsScreen() {
     setPhotoFilters,
     setVideoFilters,
     setDateFilter,
-    setAIModel,
-    setAISortModel,
   } = useSettingsStore(
     useShallow(s => ({
       photoSort: s.photoSort,
@@ -115,28 +112,14 @@ export function SettingsScreen() {
       setPhotoFilters: s.setPhotoFilters,
       setVideoFilters: s.setVideoFilters,
       setDateFilter: s.setDateFilter,
-      setAIModel: s.setAIModel,
-      setAISortModel: s.setAISortModel,
     })),
   );
 
-  const {
-    hasModel,
-    activeModelInfo,
-    refreshModelStatus,
-    refreshCheckpoints,
-    checkpoints,
-    selectSortModel,
-    deleteCheckpoint,
-  } = useAIStore(
+  const {hasModel, activeModelInfo, refreshModelStatus} = useAIStore(
     useShallow(s => ({
       hasModel: s.hasModel,
       activeModelInfo: s.activeModelInfo,
       refreshModelStatus: s.refreshModelStatus,
-      refreshCheckpoints: s.refreshCheckpoints,
-      checkpoints: s.checkpoints,
-      selectSortModel: s.selectSortModel,
-      deleteCheckpoint: s.deleteCheckpoint,
     })),
   );
   const resetAIQueue = useQueueStore(s => s.resetAIQueue);
@@ -148,8 +131,7 @@ export function SettingsScreen() {
 
   useEffect(() => {
     refreshModelStatus();
-    refreshCheckpoints();
-  }, [refreshModelStatus, refreshCheckpoints]);
+  }, [refreshModelStatus]);
 
   const handleResetKeepHistory = useCallback(() => {
     Alert.alert(
@@ -183,57 +165,6 @@ export function SettingsScreen() {
       ],
     );
   }, [resetAIQueue]);
-
-  const handleSelectSortModel = useCallback(
-    async (modelId: TrainableModelId) => {
-      try {
-        await selectSortModel(modelId);
-        setAISortModel(modelId);
-        setAIModel(modelId);
-      } catch (e: unknown) {
-        Alert.alert(
-          'Load failed',
-          e instanceof Error ? e.message : String(e),
-        );
-      }
-    },
-    [selectSortModel, setAISortModel, setAIModel],
-  );
-
-  const handleDeleteCheckpoint = useCallback(
-    (modelId: string) => {
-      const label =
-        TRAINABLE_MODELS.find(m => m.id === modelId)?.label ?? modelId;
-      Alert.alert(
-        `Delete ${label}?`,
-        `This will delete ${label}'s weights. This action is irreversible. Are you sure?`,
-        [
-          {text: 'Cancel', style: 'cancel'},
-          {
-            text: 'Delete',
-            style: 'destructive',
-            onPress: async () => {
-              const prevSort = useSettingsStore.getState().aiSortModel;
-              await deleteCheckpoint(modelId);
-              if (prevSort === modelId) {
-                setAISortModel(null);
-              }
-              await resetAIQueue();
-              await refreshCheckpoints();
-              await refreshModelStatus();
-            },
-          },
-        ],
-      );
-    },
-    [
-      deleteCheckpoint,
-      resetAIQueue,
-      refreshCheckpoints,
-      refreshModelStatus,
-      setAISortModel,
-    ],
-  );
 
   const handleFromChange = useCallback(
     (event: DateTimePickerEvent, selectedDate?: Date) => {
@@ -377,67 +308,11 @@ export function SettingsScreen() {
         />
 
         {photoSort === 'ai' && (
-          <>
-            <Text style={[styles.filterLabel, isDark && styles.textSecondary]}>
-              {hasModel && activeModelInfo
-                ? `Active: ${activeModelInfo.label ?? activeModelInfo.modelId} · ${(activeModelInfo.testSize ?? 0) > 0 ? 'test accuracy' : 'accuracy'} ${((activeModelInfo.accuracy ?? activeModelInfo.bestTestAcc ?? 0) * 100).toFixed(0)}% · F1 ${(activeModelInfo.f1 ?? 0).toFixed(2)}`
-                : 'No trained model yet'}
-            </Text>
-            {checkpoints.length === 0 ? (
-              <Text style={[styles.filterLabel, isDark && styles.textSecondary]}>
-                No saved checkpoints. Train a model from the Train AI tab.
-              </Text>
-            ) : (
-              checkpoints.map(cp => {
-                const label =
-                  TRAINABLE_MODELS.find(m => m.id === cp.modelId)?.label ??
-                  cp.modelId;
-                const isActive = activeModelInfo?.modelId === cp.modelId;
-                const date = new Date(cp.trainedAt || cp.savedAt || 0);
-                return (
-                  <View
-                    key={cp.modelId}
-                    style={[styles.checkpointRow, isDark && styles.rowDark]}>
-                    <TouchableOpacity
-                      style={styles.checkpointInfo}
-                      onPress={() =>
-                        handleSelectSortModel(cp.modelId as TrainableModelId)
-                      }>
-                      <Text
-                        style={[
-                          styles.checkpointTitle,
-                          isDark && styles.textDark,
-                          isActive && styles.checkpointActive,
-                        ]}>
-                        {label}
-                        {isActive ? ' (active)' : ''}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.checkpointMeta,
-                          isDark && styles.textSecondary,
-                        ]}>
-                        {(cp.testSize ?? 0) > 0 ? 'test accuracy' : 'accuracy'}{' '}
-                        {((cp.accuracy ?? cp.bestTestAcc ?? 0) * 100).toFixed(0)}% · F1{' '}
-                        {(cp.f1 ?? 0).toFixed(2)} ·{' '}
-                        {(cp.testSize ?? 0) > 0
-                          ? `trained ${cp.trainSize ?? 0} · tested ${cp.testSize} · `
-                          : `${cp.trainSize ?? 0} photos in last update · `}
-                        {isNaN(date.getTime()) || date.getTime() === 0
-                          ? '—'
-                          : date.toLocaleDateString()}
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.checkpointDelete}
-                      onPress={() => handleDeleteCheckpoint(cp.modelId)}>
-                      <Text style={styles.checkpointDeleteText}>Delete</Text>
-                    </TouchableOpacity>
-                  </View>
-                );
-              })
-            )}
-          </>
+          <Text style={[styles.filterLabel, isDark && styles.textSecondary]}>
+            {hasModel && activeModelInfo
+              ? `Active: ${activeModelInfo.label ?? activeModelInfo.modelId} · ${(activeModelInfo.testSize ?? 0) > 0 ? 'test accuracy' : 'accuracy'} ${((activeModelInfo.accuracy ?? activeModelInfo.bestTestAcc ?? 0) * 100).toFixed(0)}% · F1 ${(activeModelInfo.f1 ?? 0).toFixed(2)}`
+              : 'No trained model yet'}
+          </Text>
         )}
 
         <View style={[styles.row, isDark && styles.rowDark, styles.additionalFiltersRow]}>
@@ -778,24 +653,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
   },
-  checkpointRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e0e0e0',
-  },
-  checkpointInfo: {flex: 1, paddingRight: 8},
-  checkpointTitle: {fontSize: 15, fontWeight: '600', color: '#333'},
-  checkpointActive: {color: '#007AFF'},
-  checkpointMeta: {fontSize: 12, color: '#8e8e93', marginTop: 2},
-  checkpointDelete: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: '#ff3b30',
-    borderRadius: 6,
-  },
-  checkpointDeleteText: {color: '#fff', fontSize: 12, fontWeight: '600'},
   actionButton: {
     marginTop: 12,
     paddingVertical: 14,
