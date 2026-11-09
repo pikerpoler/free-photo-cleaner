@@ -27,6 +27,7 @@ import {
   getPendingDeleteIds,
   upsertCatalogAssets,
   getCatalogAssets,
+  updateCatalogLocalFlags,
   pruneCatalogToIds,
   getPersistedUndoStack,
   getPendingDeleteAggregate,
@@ -66,6 +67,8 @@ interface QueueState {
   photoEligibleCount: number;
   photoReviewStats: ReviewAggregateStats;
   videoReviewStats: ReviewAggregateStats;
+  /** Unreviewed iCloud-only photos remain after the local deck is empty. */
+  photoICloudRemainder: boolean;
   photoUndoStack: UndoEntry[];
   videoUndoStack: UndoEntry[];
 
@@ -119,6 +122,8 @@ const AI_SCORE_BATCH = 20;
 const AI_REFILL_THRESHOLD = 90;
 /** Lowest-scored remaining cards dropped before scoring new batch. */
 const AI_REFILL_DROP = 10;
+/** Stamp this many upcoming photo cards for on-device originals. */
+const DECK_LOOKAHEAD = 20;
 
 let aiFillInFlight = false;
 /** Bumped to cancel an in-flight AI fill (e.g. resetAIQueue). */
@@ -318,6 +323,128 @@ function filterEligible(
   return matched.filter(a => !keptIds.has(a.id) && !pendingIds.has(a.id));
 }
 
+/** Eligible for the swipe deck. iCloud-only originals stay in To review stats. */
+function filterForDeck(
+  raw: MediaAsset[],
+  type: MediaType,
+  photoFilters?: PhotoFilters,
+  videoFilters?: VideoFilters,
+  dateFilter?: DateFilter,
+): MediaAsset[] {
+  const eligible = filterEligible(
+    raw,
+    type,
+    photoFilters,
+    videoFilters,
+    dateFilter,
+  );
+  if (type !== 'photo' || photoFilters?.includeICloud === true) {
+    return eligible;
+  }
+  return eligible.filter(a => a.isLocal !== false);
+}
+
+function shouldExcludeICloudFromDeck(): boolean {
+  return currentPhotoFilters?.includeICloud !== true;
+}
+
+function photoHasICloudRemainder(): boolean {
+  if (!shouldExcludeICloudFromDeck()) return false;
+  const eligible = filterEligible(
+    photoRawCache,
+    'photo',
+    currentPhotoFilters,
+    undefined,
+    currentDateFilter,
+  );
+  return eligible.some(a => a.isLocal === false);
+}
+
+function applyLocalFlags(assets: MediaAsset[], stamped: MediaAsset[]): void {
+  const byId = new Map<string, boolean | undefined>();
+  for (const a of stamped) {
+    if (a.isLocal !== undefined) byId.set(a.id, a.isLocal);
+  }
+  if (byId.size === 0) return;
+  for (const a of assets) {
+    const flag = byId.get(a.id);
+    if (flag !== undefined) a.isLocal = flag;
+  }
+  for (const a of photoRawCache) {
+    const flag = byId.get(a.id);
+    if (flag !== undefined) a.isLocal = flag;
+  }
+}
+
+async function stampAssets(assets: MediaAsset[]): Promise<MediaAsset[]> {
+  const need = assets.filter(
+    a => a.type === 'photo' && a.isLocal === undefined,
+  );
+  if (need.length === 0) return assets;
+  const stamped = await stampLocalAvailability(need);
+  applyLocalFlags(assets, stamped);
+  updateCatalogLocalFlags(
+    stamped
+      .filter(a => a.isLocal !== undefined)
+      .map(a => ({id: a.id, isLocal: Boolean(a.isLocal)})),
+  );
+  return assets;
+}
+
+async function stampForScoring(batch: MediaAsset[]): Promise<MediaAsset[]> {
+  if (batch.length === 0) return batch;
+  await stampAssets(batch);
+  if (!shouldExcludeICloudFromDeck()) return batch;
+  return batch.filter(a => a.isLocal !== false);
+}
+
+async function admitLocalPrefix(
+  queue: MediaAsset[],
+  index: number,
+): Promise<MediaAsset[]> {
+  if (!shouldExcludeICloudFromDeck()) {
+    const window = queue.slice(index, index + DECK_LOOKAHEAD);
+    await stampAssets(window);
+    return queue;
+  }
+
+  let q = queue;
+  for (let guard = 0; guard < 500; guard += 1) {
+    const window = q.slice(index, index + DECK_LOOKAHEAD);
+    const unknown = window.filter(
+      a => a.type === 'photo' && a.isLocal === undefined,
+    );
+    if (unknown.length > 0) {
+      await stampAssets(unknown);
+    }
+    const tail = q.slice(index);
+    const kept = tail.filter(a => a.isLocal !== false);
+    if (kept.length === tail.length) return q;
+    q = [...q.slice(0, index), ...kept];
+  }
+  return q;
+}
+
+function refreshPhotoDeck(
+  set: (
+    partial:
+      | Partial<QueueState>
+      | ((state: QueueState) => Partial<QueueState>),
+  ) => void,
+  get: () => QueueState,
+): void {
+  const generation = photoLoadGeneration;
+  void (async () => { // eslint-disable-line no-void
+    const state = get();
+    const admitted = await admitLocalPrefix(state.photoQueue, state.photoIndex);
+    if (generation !== photoLoadGeneration) return;
+    set({
+      photoQueue: admitted,
+      ...reviewStatsPartial('photo'),
+    });
+  })();
+}
+
 function sumFileSizes(assets: MediaAsset[]): number {
   return assets.reduce((sum, a) => sum + a.fileSize, 0);
 }
@@ -354,6 +481,7 @@ function buildReviewAggregates(): {
   photoEligibleCount: number;
   photoReviewStats: ReviewAggregateStats;
   videoReviewStats: ReviewAggregateStats;
+  photoICloudRemainder: boolean;
 } {
   const photoTR = getPhotoToReviewStats();
   const videoTR = getVideoToReviewStats();
@@ -363,6 +491,7 @@ function buildReviewAggregates(): {
   const videoKept = getKeptAggregate('video');
   return {
     photoEligibleCount: photoTR.count,
+    photoICloudRemainder: photoHasICloudRemainder(),
     photoReviewStats: {
       toReviewCount: photoTR.count,
       toReviewBytes: photoTR.totalBytes,
@@ -385,7 +514,10 @@ function buildReviewAggregates(): {
 function reviewStatsPartial(type?: MediaType): Partial<
   Pick<
     QueueState,
-    'photoEligibleCount' | 'photoReviewStats' | 'videoReviewStats'
+    | 'photoEligibleCount'
+    | 'photoReviewStats'
+    | 'videoReviewStats'
+    | 'photoICloudRemainder'
   >
 > {
   if (type === 'photo') {
@@ -394,6 +526,7 @@ function reviewStatsPartial(type?: MediaType): Partial<
     const photoKept = getKeptAggregate('photo');
     return {
       photoEligibleCount: photoTR.count,
+      photoICloudRemainder: photoHasICloudRemainder(),
       photoReviewStats: {
         toReviewCount: photoTR.count,
         toReviewBytes: photoTR.totalBytes,
@@ -474,7 +607,7 @@ function rebuildAIQueueFromScores(
 } {
   const state = get();
   const scoreById = useAIStore.getState().scoreById;
-  const eligible = filterEligible(
+  const eligible = filterForDeck(
     photoRawCache,
     'photo',
     currentPhotoFilters,
@@ -593,7 +726,7 @@ async function ensureAIQueueFilled(
       }
 
       const scoreById = useAIStore.getState().scoreById;
-      const eligible = filterEligible(
+      const eligible = filterForDeck(
         photoRawCache,
         'photo',
         currentPhotoFilters,
@@ -659,15 +792,21 @@ async function ensureAIQueueFilled(
           set({isLoadingPhotos: false, ...reviewStatsPartial()});
           break;
         }
+        batch = await stampForScoring(batch);
+        if (batch.length === 0) {
+          aiRefillExcludeIds = new Set();
+          continue;
+        }
         await useAIStore.getState().scoreAssets(batch);
         aiRefillExcludeIds = new Set();
         continue;
       }
 
-      const batch = sampleRandom(unscoredAll, AI_SCORE_BATCH);
+      const batch = await stampForScoring(
+        sampleRandom(unscoredAll, AI_SCORE_BATCH),
+      );
       if (batch.length === 0) {
-        set({isLoadingPhotos: false, ...reviewStatsPartial()});
-        break;
+        continue;
       }
       await useAIStore.getState().scoreAssets(batch);
     }
@@ -714,13 +853,9 @@ function applyPhotoFilters(
   assets: MediaAsset[],
   filters: PhotoFilters,
 ): MediaAsset[] {
-  const withoutICloud = filters.includeICloud
-    ? assets
-    : assets.filter(asset => asset.isLocal !== false);
+  if (filters.mode === 'all') return assets;
 
-  if (filters.mode === 'all') return withoutICloud;
-
-  return withoutICloud.filter(asset => {
+  return assets.filter(asset => {
     if (filters.screenshots && asset.isScreenshot) return true;
     if (filters.whatsapp && asset.isWhatsApp) return true;
     if (filters.noMetadata && !asset.hasExif) return true;
@@ -755,7 +890,7 @@ function filterAndSort(
   dateFilter?: DateFilter,
 ): MediaAsset[] {
   return sortAssets(
-    filterEligible(raw, type, photoFilters, videoFilters, dateFilter),
+    filterForDeck(raw, type, photoFilters, videoFilters, dateFilter),
     sort,
   );
 }
@@ -780,7 +915,7 @@ function rebuildLoadedQueue(
 
   if (sort === 'random') {
     const frozenIds = new Set(frozenPrefix.map(a => a.id));
-    const eligible = filterEligible(
+    const eligible = filterForDeck(
       raw,
       type,
       photoFilters,
@@ -849,6 +984,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   photoEligibleCount: initialReview.photoEligibleCount,
   photoReviewStats: initialReview.photoReviewStats,
   videoReviewStats: initialReview.videoReviewStats,
+  photoICloudRemainder: initialReview.photoICloudRemainder,
   photoUndoStack: getPersistedUndoStack('photo') as UndoEntry[],
   videoUndoStack: getPersistedUndoStack('video') as UndoEntry[],
 
@@ -909,13 +1045,27 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             isPhoto ? undefined : currentVideoFilters,
             currentDateFilter,
           );
-          set({
-            [queueKey]: queue,
-            [indexKey]: 0,
-            [loadingKey]: false,
-            [loadingMoreKey]: true,
-            ...reviewStatsPartial(),
-          });
+          if (isPhoto) {
+            void (async () => { // eslint-disable-line no-void
+              const admitted = await admitLocalPrefix(queue, 0);
+              if (generation !== photoLoadGeneration) return;
+              set({
+                photoQueue: admitted,
+                photoIndex: 0,
+                isLoadingPhotos: false,
+                isLoadingPhotosMore: true,
+                ...reviewStatsPartial(),
+              });
+            })();
+          } else {
+            set({
+              [queueKey]: queue,
+              [indexKey]: 0,
+              [loadingKey]: false,
+              [loadingMoreKey]: true,
+              ...reviewStatsPartial(),
+            });
+          }
         }
       } else {
         set({
@@ -996,6 +1146,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
               [loadingMoreKey]: !done,
               ...reviewStatsPartial(),
             });
+            if (isPhoto) refreshPhotoDeck(set, get);
           } else if (done) {
             // Full library sync without date filter on CameraRoll when catalog warm
             // — still prune using all seen IDs from this sync pass
@@ -1026,6 +1177,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
               [loadingKey]: false,
               ...reviewStatsPartial(),
             });
+            if (isPhoto) refreshPhotoDeck(set, get);
           } else if (addedCount === 0) {
             return;
           } else {
@@ -1048,6 +1200,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
               [loadingKey]: false,
               ...reviewStatsPartial(),
             });
+            if (isPhoto) refreshPhotoDeck(set, get);
           }
         },
         dateFilter,
@@ -1068,12 +1221,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         isLoadingPhotosMore: true,
         ...reviewStatsPartial(),
       });
-      void stampLocalAvailability(catalog).then(stamped => { // eslint-disable-line no-void
-        startScan(stamped);
-      });
-    } else {
-      startScan(catalog);
     }
+    startScan(catalog);
   },
 
   applyFilters: (type, sort, photoFilters, videoFilters) => {
@@ -1127,6 +1276,19 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       currentDateFilter,
     );
 
+    if (isPhoto) {
+      void (async () => { // eslint-disable-line no-void
+        const admitted = await admitLocalPrefix(queue, 0);
+        set({
+          photoQueue: admitted,
+          photoIndex: 0,
+          isLoadingPhotos: false,
+          ...reviewStatsPartial(),
+        });
+      })();
+      return;
+    }
+
     set({
       [queueKey]: queue,
       [indexKey]: 0,
@@ -1170,6 +1332,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (type === 'photo') {
       captureTrainingExample(asset.id, asset.uri, 1);
       maybeRefillAIQueue(set, get);
+      refreshPhotoDeck(set, get);
     }
   },
 
@@ -1197,6 +1360,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (type === 'photo') {
       captureTrainingExample(asset.id, asset.uri, 0);
       maybeRefillAIQueue(set, get);
+      refreshPhotoDeck(set, get);
     }
   },
 
@@ -1353,13 +1517,16 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       return;
     }
 
-    const queue = filterAndSort(
-      photoRawCache,
-      'photo',
-      currentPhotoSort,
-      currentPhotoFilters,
-      undefined,
-      currentDateFilter,
+    const queue = await admitLocalPrefix(
+      filterAndSort(
+        photoRawCache,
+        'photo',
+        currentPhotoSort,
+        currentPhotoFilters,
+        undefined,
+        currentDateFilter,
+      ),
+      0,
     );
     set({
       photoQueue: queue,

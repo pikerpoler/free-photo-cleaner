@@ -38,6 +38,7 @@ export function PhotosScreen() {
     photoUndoStack,
     photoPendingCount,
     photoReviewStats,
+    photoICloudRemainder,
     reconcileAIScoringOnFocus,
   } = useQueueStore(
     useShallow(s => ({
@@ -55,6 +56,7 @@ export function PhotosScreen() {
       photoUndoStack: s.photoUndoStack,
       photoPendingCount: s.photoPendingCount,
       photoReviewStats: s.photoReviewStats,
+      photoICloudRemainder: s.photoICloudRemainder,
       reconcileAIScoringOnFocus: s.reconcileAIScoringOnFocus,
     })),
   );
@@ -182,9 +184,23 @@ export function PhotosScreen() {
           <Text style={[styles.emptyTitle, isDark && styles.textDark]}>
             All caught up!
           </Text>
-          <Text style={[styles.emptySubtitle, isDark && styles.textSecondary]}>
-            No more photos to review.
-          </Text>
+          {photoICloudRemainder ? (
+            <>
+              <Text
+                style={[styles.emptySubtitle, isDark && styles.textSecondary]}>
+                No more photos to review locally.
+              </Text>
+              <Text
+                style={[styles.emptySubtitle, isDark && styles.textSecondary]}>
+                You appear to have some photos backed on iCloud but we can't
+                review those right now.
+              </Text>
+            </>
+          ) : (
+            <Text style={[styles.emptySubtitle, isDark && styles.textSecondary]}>
+              No more photos to review.
+            </Text>
+          )}
         </View>
         <StorageBar />
       </View>
@@ -268,5 +284,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#666',
     marginTop: 6,
+    textAlign: 'center',
+    paddingHorizontal: 24,
   },
 });

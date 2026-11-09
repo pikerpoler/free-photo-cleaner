@@ -404,7 +404,7 @@ enum PhotoFeatures {
     options.isSynchronous = true
     options.deliveryMode = .highQualityFormat
     options.resizeMode = .fast
-    options.isNetworkAccessAllowed = true
+    options.isNetworkAccessAllowed = false
     let w = CGFloat(asset.pixelWidth)
     let h = CGFloat(asset.pixelHeight)
     let scale = CGFloat(longEdge) / max(w, h, 1)

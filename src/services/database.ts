@@ -52,9 +52,16 @@ export function getDatabase(): DB {
       has_exif INTEGER,
       is_screenshot INTEGER,
       is_whatsapp INTEGER,
+      is_local INTEGER,
       updated_at INTEGER NOT NULL
     )
   `);
+
+  try {
+    db.executeSync('ALTER TABLE asset_catalog ADD COLUMN is_local INTEGER');
+  } catch {
+    // Column already exists on upgraded databases.
+  }
 
   db.executeSync(`
     CREATE INDEX IF NOT EXISTS idx_asset_catalog_type_date
@@ -529,6 +536,8 @@ function rowToAsset(row: Record<string, unknown>): MediaAsset {
     hasExif: Boolean(row.has_exif),
     isScreenshot: Boolean(row.is_screenshot),
     isWhatsApp: Boolean(row.is_whatsapp),
+    isLocal:
+      row.is_local == null ? undefined : Boolean(Number(row.is_local)),
   };
 }
 
@@ -540,9 +549,23 @@ export function upsertCatalogAssets(assets: MediaAsset[]): void {
   try {
     for (const a of assets) {
       database.executeSync(
-        `INSERT OR REPLACE INTO asset_catalog
-         (id, uri, media_type, filename, width, height, file_size, creation_date, duration, has_exif, is_screenshot, is_whatsapp, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO asset_catalog
+         (id, uri, media_type, filename, width, height, file_size, creation_date, duration, has_exif, is_screenshot, is_whatsapp, is_local, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           uri=excluded.uri,
+           media_type=excluded.media_type,
+           filename=excluded.filename,
+           width=excluded.width,
+           height=excluded.height,
+           file_size=excluded.file_size,
+           creation_date=excluded.creation_date,
+           duration=excluded.duration,
+           has_exif=excluded.has_exif,
+           is_screenshot=excluded.is_screenshot,
+           is_whatsapp=excluded.is_whatsapp,
+           is_local=COALESCE(excluded.is_local, asset_catalog.is_local),
+           updated_at=excluded.updated_at`,
         [
           a.id,
           a.uri,
@@ -556,9 +579,30 @@ export function upsertCatalogAssets(assets: MediaAsset[]): void {
           a.hasExif ? 1 : 0,
           a.isScreenshot ? 1 : 0,
           a.isWhatsApp ? 1 : 0,
+          a.isLocal === undefined ? null : a.isLocal ? 1 : 0,
           now,
         ],
       );
+    }
+    database.executeSync('COMMIT');
+  } catch (e) {
+    database.executeSync('ROLLBACK');
+    throw e;
+  }
+}
+
+export function updateCatalogLocalFlags(
+  flags: Array<{id: string; isLocal: boolean}>,
+): void {
+  if (flags.length === 0) return;
+  const database = getDatabase();
+  database.executeSync('BEGIN');
+  try {
+    for (const row of flags) {
+      database.executeSync('UPDATE asset_catalog SET is_local = ? WHERE id = ?', [
+        row.isLocal ? 1 : 0,
+        row.id,
+      ]);
     }
     database.executeSync('COMMIT');
   } catch (e) {
