@@ -93,8 +93,8 @@ export async function fetchMediaAssets(
     ...(toTime != null ? {toTime} : {}),
   });
 
-  const assets = await stampLocalAvailability(
-    result.edges.map(edge => photoIdentifierToMediaAsset(edge, type)),
+  const assets = result.edges.map(edge =>
+    photoIdentifierToMediaAsset(edge, type),
   );
 
   return {

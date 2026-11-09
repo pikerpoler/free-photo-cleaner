@@ -58,6 +58,8 @@ interface QueueState {
   photoIndex: number;
   videoIndex: number;
   isLoadingPhotos: boolean;
+  /** True only while an AI fill is scoring, not while waiting for the photo pool. */
+  isScoringPhotos: boolean;
   isLoadingVideos: boolean;
   isLoadingPhotosMore: boolean;
   isLoadingVideosMore: boolean;
@@ -124,12 +126,20 @@ const AI_REFILL_THRESHOLD = 90;
 const AI_REFILL_DROP = 10;
 /** Stamp this many upcoming photo cards for on-device originals. */
 const DECK_LOOKAHEAD = 20;
+/** Wait for this many photos in memory (or scan done) before the first AI window. */
+const AI_INITIAL_POOL = 1000;
+
+function photoPoolReady(): boolean {
+  return photoRawCache.length >= AI_INITIAL_POOL || photoScanDone;
+}
 
 let aiFillInFlight = false;
 /** Bumped to cancel an in-flight AI fill (e.g. resetAIQueue). */
 let aiFillRunId = 0;
 /** True once the window first reaches AI_QUEUE_CAP; enables turnover refills. */
 let aiQueuePrimed = false;
+/** CameraRoll reported no more pages for the current photo load. */
+let photoScanDone = false;
 /** Dropped ids to skip when sampling the current refill batch. */
 let aiRefillExcludeIds = new Set<string>();
 
@@ -621,6 +631,7 @@ function rebuildAIQueueFromScores(
   const index = state.photoIndex;
   const past = state.photoQueue.slice(0, index);
   const current = state.photoQueue[index];
+  const behind = state.photoQueue[index + 1];
 
   // Drop past cards that are no longer eligible, but keep anything still on
   // the undo stack. Those cards sit just behind the cursor, and removing them
@@ -630,16 +641,26 @@ function rebuildAIQueueFromScores(
   const pastKept = past.filter(
     a => eligibleIds.has(a.id) || undoIds.has(a.id),
   );
-  // Only a normal refill pins the card on screen. A fresh fill, model
-  // rescore, or hard reset re-ranks it with the rest of the window.
+  // Only a normal refill pins the on-screen pair. A fresh fill, model
+  // rescore, or hard reset re-ranks them with the rest of the window.
   const currentKept =
     freezeCurrent && current && eligibleIds.has(current.id)
       ? current
       : undefined;
+  const behindKept =
+    freezeCurrent &&
+    currentKept &&
+    behind &&
+    behind.id !== currentKept.id &&
+    eligibleIds.has(behind.id)
+      ? behind
+      : undefined;
 
-  const aheadCap = currentKept ? AI_QUEUE_CAP - 1 : AI_QUEUE_CAP;
+  const frozenSlots = (currentKept ? 1 : 0) + (behindKept ? 1 : 0);
+  const aheadCap = Math.max(0, AI_QUEUE_CAP - frozenSlots);
   const frozenForAhead = new Set(pastKept.map(a => a.id));
   if (currentKept) frozenForAhead.add(currentKept.id);
+  if (behindKept) frozenForAhead.add(behindKept.id);
 
   const ahead = buildScoredRemainder(
     eligible,
@@ -648,9 +669,12 @@ function rebuildAIQueueFromScores(
     aheadCap,
   );
 
-  const queue = currentKept
-    ? [...pastKept, currentKept, ...ahead]
-    : [...pastKept, ...ahead];
+  const queue = [
+    ...pastKept,
+    ...(currentKept ? [currentKept] : []),
+    ...(behindKept ? [behindKept] : []),
+    ...ahead,
+  ];
   const nextIndex = pastKept.length;
   const remaining = queue.length - nextIndex;
 
@@ -685,6 +709,7 @@ async function rescoreCurrentAIQueue(
     photoQueue: past,
     photoIndex: past.length,
     isLoadingPhotos: true,
+    isScoringPhotos: true,
     ...reviewStatsPartial(),
   });
   if (remaining.length > 0) {
@@ -700,6 +725,7 @@ async function rescoreCurrentAIQueue(
     photoQueue: built.queue,
     photoIndex: built.index,
     isLoadingPhotos: false,
+    isScoringPhotos: false,
     ...reviewStatsPartial(),
   });
   syncQueueScoreStamp();
@@ -735,6 +761,17 @@ async function ensureAIQueueFilled(
       );
       const unscoredAll = eligible.filter(a => scoreById[a.id] === undefined);
 
+      if (!aiQueuePrimed && !photoPoolReady()) {
+        set({
+          photoQueue: built.queue,
+          photoIndex: built.index,
+          isLoadingPhotos: true,
+          isScoringPhotos: false,
+          ...reviewStatsPartial(),
+        });
+        break;
+      }
+
       const needInitialFill =
         !aiQueuePrimed &&
         built.remaining < AI_QUEUE_CAP &&
@@ -743,20 +780,27 @@ async function ensureAIQueueFilled(
       const needTurnover =
         aiQueuePrimed && built.remaining <= AI_REFILL_THRESHOLD;
 
+      // Stay on "Scoring photos..." for the whole first window. A later
+      // turnover refill only takes the screen when the deck is already empty.
+      const showSpinner =
+        needInitialFill ||
+        (built.queue.length === 0 &&
+          (needTurnover || photoRawCache.length === 0));
       set({
         photoQueue: built.queue,
         photoIndex: built.index,
-        isLoadingPhotos:
-          built.queue.length === 0 &&
-          (needInitialFill ||
-            needTurnover ||
-            photoRawCache.length === 0),
+        isLoadingPhotos: showSpinner,
+        isScoringPhotos: needInitialFill || (showSpinner && needTurnover),
         ...reviewStatsPartial(),
       });
 
       if (!needInitialFill && !needTurnover) {
         if (built.queue.length > 0 || unscoredAll.length === 0) {
-          set({isLoadingPhotos: false, ...reviewStatsPartial()});
+          set({
+            isLoadingPhotos: false,
+            isScoringPhotos: false,
+            ...reviewStatsPartial(),
+          });
         }
         if (built.queue.length > 0) {
           syncQueueScoreStamp();
@@ -789,7 +833,11 @@ async function ensureAIQueueFilled(
         }
         if (batch.length === 0) {
           aiRefillExcludeIds = new Set();
-          set({isLoadingPhotos: false, ...reviewStatsPartial()});
+          set({
+            isLoadingPhotos: false,
+            isScoringPhotos: false,
+            ...reviewStatsPartial(),
+          });
           break;
         }
         batch = await stampForScoring(batch);
@@ -896,9 +944,10 @@ function filterAndSort(
 }
 
 /**
- * Rebuild the queue after a progressive page without moving the current card.
- * Random order keeps every card already placed and only shuffles assets that
- * were not in the queue yet, appended after them. Other modes re-sort the tail.
+ * Rebuild the queue after a progressive page without moving the current card
+ * or the one behind it. Random order keeps every card already placed and only
+ * shuffles assets that were not in the queue yet, appended after them. Other
+ * modes re-sort the tail.
  */
 function rebuildLoadedQueue(
   currentQueue: MediaAsset[],
@@ -910,7 +959,7 @@ function rebuildLoadedQueue(
   videoFilters?: VideoFilters,
   dateFilter?: DateFilter,
 ): MediaAsset[] {
-  const frozenCount = Math.min(currentIndex + 1, currentQueue.length);
+  const frozenCount = Math.min(currentIndex + 2, currentQueue.length);
   const frozenPrefix = currentQueue.slice(0, frozenCount);
 
   if (sort === 'random') {
@@ -976,6 +1025,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   photoIndex: 0,
   videoIndex: 0,
   isLoadingPhotos: false,
+  isScoringPhotos: false,
   isLoadingVideos: false,
   isLoadingPhotosMore: false,
   isLoadingVideosMore: false,
@@ -1000,6 +1050,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       aiQueuePrimed = false;
       aiRefillExcludeIds = new Set();
       aiQueueScoreStamp = null;
+      photoScanDone = false;
       setRawCache('photo', []);
     } else {
       videoLoadController?.cancel();
@@ -1032,6 +1083,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             photoQueue: [],
             photoIndex: 0,
             isLoadingPhotos: true,
+            isScoringPhotos: photoPoolReady(),
             isLoadingPhotosMore: true,
             ...reviewStatsPartial(),
           });
@@ -1053,6 +1105,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
                 photoQueue: admitted,
                 photoIndex: 0,
                 isLoadingPhotos: false,
+                isScoringPhotos: false,
                 isLoadingPhotosMore: true,
                 ...reviewStatsPartial(),
               });
@@ -1072,6 +1125,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           [queueKey]: [],
           [indexKey]: 0,
           [loadingKey]: true,
+          isScoringPhotos: false,
           [loadingMoreKey]: false,
           ...reviewStatsPartial(),
         });
@@ -1087,12 +1141,15 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       const controller = loadMediaProgressively(
         type,
         (batch, done) => {
-          const uniqueBatch = dedupeById(batch);
+          const uniqueBatch = applyCachedLocalFlags(dedupeById(batch));
           for (const a of uniqueBatch) seenIds.add(a.id);
 
           upsertCatalogAssets(uniqueBatch);
 
           const addedCount = appendNewRawAssets(type, uniqueBatch);
+          if (isPhoto && done) {
+            photoScanDone = true;
+          }
 
           const rawCache = isPhoto ? photoRawCache : videoRawCache;
           const currentSort = isPhoto ? currentPhotoSort : currentVideoSort;
@@ -1143,6 +1200,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
               [queueKey]: queue,
               [indexKey]: 0,
               [loadingKey]: false,
+              isScoringPhotos: false,
               [loadingMoreKey]: !done,
               ...reviewStatsPartial(),
             });
@@ -1175,6 +1233,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
               [queueKey]: queue,
               [loadingMoreKey]: false,
               [loadingKey]: false,
+              isScoringPhotos: false,
               ...reviewStatsPartial(),
             });
             if (isPhoto) refreshPhotoDeck(set, get);
@@ -1218,6 +1277,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         photoQueue: [],
         photoIndex: 0,
         isLoadingPhotos: true,
+        isScoringPhotos: false,
         isLoadingPhotosMore: true,
         ...reviewStatsPartial(),
       });
@@ -1259,6 +1319,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         photoQueue: [],
         photoIndex: 0,
         isLoadingPhotos: true,
+        isScoringPhotos: photoPoolReady(),
         ...reviewStatsPartial(),
       });
       void ensureAIQueueFilled(set, get); // eslint-disable-line no-void
@@ -1283,6 +1344,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           photoQueue: admitted,
           photoIndex: 0,
           isLoadingPhotos: false,
+          isScoringPhotos: false,
           ...reviewStatsPartial(),
         });
       })();
@@ -1487,7 +1549,11 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (!queueNeedsRescoreForActiveModel()) {
       const state = get();
       if (state.photoQueue.length === 0 && photoRawCache.length > 0) {
-        set({isLoadingPhotos: true, ...reviewStatsPartial()});
+        set({
+          isLoadingPhotos: true,
+          isScoringPhotos: photoPoolReady(),
+          ...reviewStatsPartial(),
+        });
         await ensureAIQueueFilled(set, get);
         syncQueueScoreStamp();
       }
@@ -1510,6 +1576,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         photoQueue: [],
         photoIndex: 0,
         isLoadingPhotos: true,
+        isScoringPhotos: photoPoolReady(),
         ...reviewStatsPartial(),
       });
       await ensureAIQueueFilled(set, get);

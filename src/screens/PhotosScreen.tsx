@@ -27,6 +27,7 @@ export function PhotosScreen() {
     photoQueue,
     photoIndex,
     isLoadingPhotos,
+    isScoringPhotos,
     isLoadingPhotosMore,
     loadQueue,
     applySort,
@@ -45,6 +46,7 @@ export function PhotosScreen() {
       photoQueue: s.photoQueue,
       photoIndex: s.photoIndex,
       isLoadingPhotos: s.isLoadingPhotos,
+      isScoringPhotos: s.isScoringPhotos,
       isLoadingPhotosMore: s.isLoadingPhotosMore,
       loadQueue: s.loadQueue,
       applySort: s.applySort,
@@ -152,7 +154,7 @@ export function PhotosScreen() {
       <View style={[styles.center, isDark && styles.bgDark]}>
         <ActivityIndicator size="large" color="#007AFF" />
         <Text style={[styles.loadingText, isDark && styles.textDark]}>
-          {photoSort === 'ai' ? 'Scoring photos...' : 'Loading photos...'}
+          {isScoringPhotos ? 'Scoring photos...' : 'Loading photos...'}
         </Text>
       </View>
     );
