@@ -6,9 +6,6 @@ import CoreML
 import Accelerate
 
 enum PhotoFeatures {
-  private static var photometricCount = 0
-  private static let photometricLock = NSLock()
-
   // MARK: - Metadata helpers
 
   static func isScreenshotFilename(_ filename: String) -> Bool {
@@ -37,11 +34,6 @@ enum PhotoFeatures {
   // MARK: - Photometric (16)
 
   static func photometric(from image: UIImage) -> [Float] {
-    let startedAt = CFAbsoluteTimeGetCurrent()
-    photometricLock.lock()
-    photometricCount += 1
-    let invocation = photometricCount
-    photometricLock.unlock()
     guard let cg = image.cgImage else {
       return [Float](repeating: 0, count: FeatureSchema.photometricCount)
     }
@@ -52,7 +44,6 @@ enum PhotoFeatures {
     }
     let bytesPerPixel = 4
     let bytesPerRow = bytesPerPixel * w
-    let rasterStartedAt = CFAbsoluteTimeGetCurrent()
     var data = [UInt8](repeating: 0, count: h * bytesPerRow)
     guard let ctx = CGContext(
       data: &data,
@@ -66,23 +57,10 @@ enum PhotoFeatures {
       return [Float](repeating: 0, count: FeatureSchema.photometricCount)
     }
     ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-    let rasterMs = (CFAbsoluteTimeGetCurrent() - rasterStartedAt) * 1000
 
-    let (features, timings) = data.withUnsafeBufferPointer { buf in
+    return data.withUnsafeBufferPointer { buf in
       PhotometricCore.compute(rgba: buf.baseAddress!, width: w, height: h, bytesPerRow: bytesPerRow)
     }
-    NSLog(
-      "[ScoreDiag] photometric n=%d pixels=%d rasterMs=%.1f pixelPassMs=%.1f " +
-        "spatialPassMs=%.1f madMs=%.1f totalMs=%.1f",
-      invocation,
-      w * h,
-      rasterMs,
-      timings.pixelPassMs,
-      timings.spatialPassMs,
-      timings.madMs,
-      (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
-    )
-    return features
   }
 
   // MARK: - YOLO aggregation (32 = 6 geom + 26 cat)

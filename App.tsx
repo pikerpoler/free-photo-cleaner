@@ -6,7 +6,6 @@ import {getDatabase} from './src/services/database';
 
 function App(): React.JSX.Element {
   useEffect(() => {
-    console.log('[ScoreDiag] app-open');
     getDatabase();
   }, []);
 

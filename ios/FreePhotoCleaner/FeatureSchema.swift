@@ -5,7 +5,7 @@ enum FeatureSchema {
   static let version = 3
   static let dim = 57
 
-  /// TEMP (debugging YOLO): when false, features are always re-extracted and never read from or written to disk.
+  /// When false, features are always re-extracted and never read from or written to disk.
   static let featureCacheEnabled = true
 
   static let photometricCount = 16

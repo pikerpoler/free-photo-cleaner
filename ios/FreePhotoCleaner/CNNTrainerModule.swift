@@ -113,7 +113,8 @@ class CNNTrainerModule: RCTEventEmitter {
         self.finish(resolve, NSNull())
         return
       }
-      if let vec = self.extractor.extractVector(uri: uri), vec.count == FeatureSchema.dim {
+      let extracted = self.extractor.extractVector(uri: uri)
+      if let vec = extracted.vector, vec.count == FeatureSchema.dim {
         self.finish(resolve, vec.map { Double($0) })
       } else {
         self.finish(resolve, NSNull())
@@ -306,33 +307,19 @@ class CNNTrainerModule: RCTEventEmitter {
                      rejecter reject: @escaping RCTPromiseRejectBlock) {
     trainQueue.async { [weak self] in
       guard let self = self else { return }
-      let startedAt = CFAbsoluteTimeGetCurrent()
       guard self.bank.hasAnyModel() else {
         self.fail(reject, "NO_MODEL", "No trained model")
         return
       }
       var scores: [Double] = []
-      var cacheHits = 0
-      var cacheMisses = 0
-      var extractMs = 0.0
-      var predictMs = 0.0
-      for uri in uris {
-        if let vec = self.extractor.extractVector(uri: uri) {
-          let extraction = self.extractor.lastDiagnostics
-          if extraction.cacheHit { cacheHits += 1 } else { cacheMisses += 1 }
-          extractMs += extraction.totalMs
-          let predictStartedAt = CFAbsoluteTimeGetCurrent()
+      for extracted in self.extractor.extractVectors(uris: uris) {
+        if let vec = extracted.vector {
           let p = self.bank.predict(vec, modelId: self.bank.activeModelId)
-          predictMs += (CFAbsoluteTimeGetCurrent() - predictStartedAt) * 1000
           scores.append(Double(p))
         } else {
-          let extraction = self.extractor.lastDiagnostics
-          if extraction.cacheHit { cacheHits += 1 } else { cacheMisses += 1 }
-          extractMs += extraction.totalMs
           scores.append(0.5)
         }
       }
-      NSLog("[ScoreDiag] predict count=%d hits=%d misses=%d extractMs=%.1f modelMs=%.1f wallMs=%.1f", uris.count, cacheHits, cacheMisses, extractMs, predictMs, (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
       self.finish(resolve, scores)
     }
   }

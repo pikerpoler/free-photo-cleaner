@@ -32,8 +32,6 @@ final class YOLODetector {
 
   private var vnModel: VNCoreMLModel?
   private let lock = NSLock()
-  private var detectCount = 0
-
   private(set) var loadStatus: YOLOLoadStatus = .missing
   private(set) var loadErrorMessage: String?
 
@@ -49,7 +47,6 @@ final class YOLODetector {
   }
 
   init() {
-    let startedAt = CFAbsoluteTimeGetCurrent()
     self.gridStrides = Self.buildGridStrides(
       inputSize: FeatureSchema.yoloLetterbox,
       strides: FeatureSchema.yoloStrides
@@ -65,18 +62,15 @@ final class YOLODetector {
         vnModel = try VNCoreMLModel(for: ml)
         loadStatus = .loaded
         loadErrorMessage = nil
-        NSLog("[ScoreDiag] yoloInit status=loaded ms=%.1f", (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
       } catch {
         loadStatus = .failed
         loadErrorMessage = error.localizedDescription
         NSLog("[FeatureAI] YOLOX model load failed: %@", error.localizedDescription)
-        NSLog("[ScoreDiag] yoloInit status=failed ms=%.1f error=%@", (CFAbsoluteTimeGetCurrent() - startedAt) * 1000, error.localizedDescription)
       }
     } else {
       loadStatus = .missing
       loadErrorMessage = "YOLOXNano.mlmodelc not found in app bundle (is YOLOXNano.mlpackage in the target's Compile Sources?)"
       NSLog("[FeatureAI] YOLOX model not bundled")
-      NSLog("[ScoreDiag] yoloInit status=missing ms=%.1f", (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
     }
   }
 
@@ -96,11 +90,8 @@ final class YOLODetector {
   }
 
   func detect(in image: UIImage) -> [DetectionBox] {
-    let startedAt = CFAbsoluteTimeGetCurrent()
     lock.lock()
     let model = vnModel
-    detectCount += 1
-    let invocation = detectCount
     lock.unlock()
 
     guard let model = model, let cg = image.cgImage else {
@@ -141,11 +132,7 @@ final class YOLODetector {
       return []
     }
 
-    let boxes = decodeRawOutput(multi, gridStrides: gridStrides, totalAnchors: totalAnchors)
-    if invocation == 1 {
-      NSLog("[ScoreDiag] yoloDetect first=1 ms=%.1f boxes=%d", (CFAbsoluteTimeGetCurrent() - startedAt) * 1000, boxes.count)
-    }
-    return boxes
+    return decodeRawOutput(multi, gridStrides: gridStrides, totalAnchors: totalAnchors)
   }
 
   // MARK: - Grid (matches YOLOXHead.decode_outputs)
@@ -308,15 +295,7 @@ final class YOLODetector {
 }
 
 enum VisionFeatures {
-  private static var extractCount = 0
-  private static let extractLock = NSLock()
-
   static func extract(from image: UIImage) -> (faces: [(CGRect, Float)], text: [CGRect]) {
-    let startedAt = CFAbsoluteTimeGetCurrent()
-    extractLock.lock()
-    extractCount += 1
-    let invocation = extractCount
-    extractLock.unlock()
     guard let cg = image.cgImage else { return ([], []) }
     var faces: [(CGRect, Float)] = []
     var texts: [CGRect] = []
@@ -338,97 +317,145 @@ enum VisionFeatures {
 
     let handler = VNImageRequestHandler(cgImage: cg, orientation: .up, options: [:])
     try? handler.perform([faceReq, textReq])
-    if invocation == 1 {
-      NSLog("[ScoreDiag] visionExtract first=1 ms=%.1f faces=%d text=%d", (CFAbsoluteTimeGetCurrent() - startedAt) * 1000, faces.count, texts.count)
-    }
     return (faces, texts)
   }
 }
 
 final class FeatureExtractor {
-  struct Diagnostics {
+  struct ExtractionResult {
+    let vector: [Float]?
     let cacheHit: Bool
-    let totalMs: Double
   }
 
-  private(set) var lastDiagnostics = Diagnostics(cacheHit: false, totalMs: 0)
-  private var extractionCount = 0
+  private enum Prepared {
+    case unavailable
+    case cached([Float])
+    case decodeFailed
+    case decoded(asset: PHAsset, key: String, image: UIImage)
+  }
 
-  func extractVector(uri: String) -> [Float]? {
-    let startedAt = CFAbsoluteTimeGetCurrent()
-    extractionCount += 1
-    let invocation = extractionCount
-    var phFetchMs = 0.0
-    var cacheMs = 0.0
-    var decodeMs = 0.0
-    var photoMs = 0.0
-    var yoloMs = 0.0
-    var visionMs = 0.0
-    var saveMs = 0.0
-    func finish(_ vector: [Float]?, cacheHit: Bool) -> [Float]? {
-      let totalMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
-      lastDiagnostics = Diagnostics(cacheHit: cacheHit, totalMs: totalMs)
-      NSLog("[ScoreDiag] extract n=%d cache=%@ phFetchMs=%.1f cacheMs=%.1f decodeMs=%.1f photoMs=%.1f yoloMs=%.1f visionMs=%.1f saveMs=%.1f totalMs=%.1f", invocation, cacheHit ? "hit" : "miss", phFetchMs, cacheMs, decodeMs, photoMs, yoloMs, visionMs, saveMs, totalMs)
-      return vector
+  private final class PrefetchSlot {
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var value: Prepared?
+
+    init(uri: String, queue: DispatchQueue, prepare: @escaping (String) -> Prepared) {
+      queue.async { [weak self] in
+        let prepared = prepare(uri)
+        self?.value = prepared
+        self?.semaphore.signal()
+      }
     }
 
+    func wait() -> Prepared {
+      semaphore.wait()
+      return value!
+    }
+  }
+
+  private let decodeQueue = DispatchQueue(label: "com.freephotocleaner.feature.decode", qos: .userInitiated)
+  private let analysisQueue = DispatchQueue(
+    label: "com.freephotocleaner.feature.analysis",
+    qos: .userInitiated,
+    attributes: .concurrent
+  )
+
+  func extractVector(uri: String) -> ExtractionResult {
+    analyze(prepare(uri: uri))
+  }
+
+  func extractVectors(uris: [String]) -> [ExtractionResult] {
+    guard let first = uris.first else { return [] }
+    var results: [ExtractionResult] = []
+    results.reserveCapacity(uris.count)
+    var next = PrefetchSlot(uri: first, queue: decodeQueue, prepare: prepare(uri:))
+    for i in uris.indices {
+      let prepared = next.wait()
+      if i + 1 < uris.count {
+        next = PrefetchSlot(uri: uris[i + 1], queue: decodeQueue, prepare: prepare(uri:))
+      }
+      results.append(analyze(prepared))
+    }
+    return results
+  }
+
+  private func prepare(uri: String) -> Prepared {
     guard let localId = PhotoFeatures.localIdentifier(from: uri) else {
-      return finish(nil, cacheHit: false)
+      return .unavailable
     }
-    let phFetchStartedAt = CFAbsoluteTimeGetCurrent()
     let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [localId], options: nil)
-    phFetchMs = (CFAbsoluteTimeGetCurrent() - phFetchStartedAt) * 1000
     guard let asset = fetch.firstObject else {
       PhotoFeatures.deleteCachedFeatures(localId: localId)
-      return finish(nil, cacheHit: false)
+      return .unavailable
     }
 
     let mod = asset.modificationDate?.timeIntervalSince1970 ?? 0
-    let cacheStartedAt = CFAbsoluteTimeGetCurrent()
     let key = PhotoFeatures.cacheKey(localId: localId, modDate: mod)
     if FeatureSchema.featureCacheEnabled, let cached = PhotoFeatures.loadCachedFeatures(key: key) {
-      cacheMs = (CFAbsoluteTimeGetCurrent() - cacheStartedAt) * 1000
-      return finish(cached, cacheHit: true)
+      return .cached(cached)
     }
-    cacheMs = (CFAbsoluteTimeGetCurrent() - cacheStartedAt) * 1000
 
-    let decodeStartedAt = CFAbsoluteTimeGetCurrent()
     guard let decode = PhotoFeatures.decodeImage(asset: asset, longEdge: FeatureSchema.decodeLongEdge) else {
-      decodeMs = (CFAbsoluteTimeGetCurrent() - decodeStartedAt) * 1000
-      return finish(nil, cacheHit: false)
+      return .decodeFailed
     }
-    decodeMs = (CFAbsoluteTimeGetCurrent() - decodeStartedAt) * 1000
-    let photoStartedAt = CFAbsoluteTimeGetCurrent()
-    let photoImg = PhotoFeatures.resizeLongest(decode, longest: FeatureSchema.photometricLongEdge) ?? decode
-    let photo = PhotoFeatures.photometric(from: photoImg)
-    photoMs = (CFAbsoluteTimeGetCurrent() - photoStartedAt) * 1000
+    return .decoded(asset: asset, key: key, image: decode)
+  }
 
-    let yoloStartedAt = CFAbsoluteTimeGetCurrent()
-    let boxes = YOLODetector.shared.detect(in: decode)
-    let yolo = PhotoFeatures.aggregateDetections(boxes)
-    yoloMs = (CFAbsoluteTimeGetCurrent() - yoloStartedAt) * 1000
+  private func analyze(_ prepared: Prepared) -> ExtractionResult {
+    switch prepared {
+    case .unavailable, .decodeFailed:
+      return ExtractionResult(vector: nil, cacheHit: false)
 
-    let visionStartedAt = CFAbsoluteTimeGetCurrent()
-    let (faceObs, textObs) = VisionFeatures.extract(from: decode)
-    let vision = PhotoFeatures.visionFeatures(faces: faceObs, textRects: textObs)
-    visionMs = (CFAbsoluteTimeGetCurrent() - visionStartedAt) * 1000
+    case .cached(let vector):
+      return ExtractionResult(vector: vector, cacheHit: true)
 
-    let fn = PhotoFeatures.filename(for: asset)
-    let meta = PhotoFeatures.metadataVector(
-      screenshot: PhotoFeatures.isScreenshot(asset: asset, filename: fn),
-      whatsapp: PhotoFeatures.isWhatsAppFilename(fn),
-      aspect: asset.pixelHeight > 0 ? Float(asset.pixelWidth) / Float(asset.pixelHeight) : 1
-    )
+    case .decoded(let asset, let key, let decode):
+      let stageLock = NSLock()
+      var photo: [Float] = []
+      var vision: [Float] = []
 
-    let vec = PhotoFeatures.assemble(photo: photo, yolo: yolo, vision: vision, meta: meta)
-    guard vec.count == FeatureSchema.dim, vec.allSatisfy({ $0.isFinite }) else {
-      return finish(nil, cacheHit: false)
+      let group = DispatchGroup()
+      group.enter()
+      analysisQueue.async {
+        let photoImg = PhotoFeatures.resizeLongest(decode, longest: FeatureSchema.photometricLongEdge) ?? decode
+        let p = PhotoFeatures.photometric(from: photoImg)
+        stageLock.lock()
+        photo = p
+        stageLock.unlock()
+        group.leave()
+      }
+
+      group.enter()
+      analysisQueue.async {
+        let (faceObs, textObs) = VisionFeatures.extract(from: decode)
+        let v = PhotoFeatures.visionFeatures(faces: faceObs, textRects: textObs)
+        stageLock.lock()
+        vision = v
+        stageLock.unlock()
+        group.leave()
+      }
+
+      let boxes = YOLODetector.shared.detect(in: decode)
+      let yolo = PhotoFeatures.aggregateDetections(boxes)
+
+      group.wait()
+
+      let fn = PhotoFeatures.filename(for: asset)
+      let meta = PhotoFeatures.metadataVector(
+        screenshot: PhotoFeatures.isScreenshot(asset: asset, filename: fn),
+        whatsapp: PhotoFeatures.isWhatsAppFilename(fn),
+        aspect: asset.pixelHeight > 0 ? Float(asset.pixelWidth) / Float(asset.pixelHeight) : 1
+      )
+
+      let vec = PhotoFeatures.assemble(photo: photo, yolo: yolo, vision: vision, meta: meta)
+      guard vec.count == FeatureSchema.dim, vec.allSatisfy({ $0.isFinite }) else {
+        return ExtractionResult(vector: nil, cacheHit: false)
+      }
+
+      if FeatureSchema.featureCacheEnabled, YOLODetector.shared.shouldPersistFeatureCache {
+        PhotoFeatures.saveCachedFeatures(key: key, vector: vec)
+      }
+
+      return ExtractionResult(vector: vec, cacheHit: false)
     }
-    let saveStartedAt = CFAbsoluteTimeGetCurrent()
-    if FeatureSchema.featureCacheEnabled, YOLODetector.shared.shouldPersistFeatureCache {
-      PhotoFeatures.saveCachedFeatures(key: key, vector: vec)
-    }
-    saveMs = (CFAbsoluteTimeGetCurrent() - saveStartedAt) * 1000
-    return finish(vec, cacheHit: false)
   }
 }

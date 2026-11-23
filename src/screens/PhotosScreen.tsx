@@ -78,7 +78,6 @@ export function PhotosScreen() {
   useEffect(() => {
     if (isFirstLoad.current) {
       isFirstLoad.current = false;
-      console.log('[ScoreDiag] photos-first-load');
       loadQueue('photo', photoSort, photoFilters, undefined, dateFilter);
       return;
     }

@@ -55,11 +55,9 @@ export const useAIStore = create<AIState>((set, get) => ({
 
       // Reuse cached scores — never re-predict the same asset.
       const need: MediaAsset[] = [];
-      let alreadyScored = 0;
       for (const a of assets) {
         const existing = get().scoreById[a.id];
         if (existing !== undefined) {
-          alreadyScored += 1;
           scores.set(a.id, existing);
         } else {
           need.push(a);
@@ -81,12 +79,7 @@ export const useAIStore = create<AIState>((set, get) => ({
       const CHUNK = 8;
       for (let i = 0; i < need.length; i += CHUNK) {
         const chunk = need.slice(i, i + CHUNK);
-        const startedAt = Date.now();
         const chunkScores = await predictScores(chunk.map(a => a.uri));
-        console.log(
-          `[ScoreDiag] scoreAssets chunk=${chunk.length} offset=${i} ` +
-            `alreadyScored=${alreadyScored} ms=${Date.now() - startedAt}`,
-        );
         const published: Record<string, number> = {};
         chunk.forEach((asset, idx) => {
           const value = chunkScores[idx] ?? 0.5;

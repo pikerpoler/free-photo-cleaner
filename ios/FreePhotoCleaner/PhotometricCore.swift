@@ -4,26 +4,18 @@ import Accelerate
 /// The 16 photometric features computed from an RGBA8888 buffer.
 /// Kept free of UIKit so it can be compiled and tested on macOS.
 enum PhotometricCore {
-  struct Timings {
-    var pixelPassMs: Double = 0
-    var spatialPassMs: Double = 0
-    var madMs: Double = 0
-  }
-
   static func compute(
     rgba: UnsafePointer<UInt8>,
     width w: Int,
     height h: Int,
     bytesPerRow: Int
-  ) -> (features: [Float], timings: Timings) {
-    var timings = Timings()
+  ) -> [Float] {
     let count = w * h
     guard w > 0, h > 0 else {
-      return ([Float](repeating: 0, count: 16), timings)
+      return [Float](repeating: 0, count: 16)
     }
 
     // Pass 1: per-pixel stats.
-    let pixelPassStartedAt = CFAbsoluteTimeGetCurrent()
     var lum = [Float](repeating: 0, count: count)
     var hist = [Int](repeating: 0, count: 32)
     var sumL = 0.0, sumL2 = 0.0
@@ -88,14 +80,12 @@ enum PhotometricCore {
     let q2 = binRange(8, 16)
     let q3 = binRange(16, 24)
     let q4 = binRange(24, 32)
-    timings.pixelPassMs = (CFAbsoluteTimeGetCurrent() - pixelPassStartedAt) * 1000
 
     // Pass 2: Laplacian (overall + center/border) and 3x3 high-pass residual.
     var lapVar: Float = 0
     var ratio: Float = 0
     var noiseMad: Float = 0
     if w > 2, h > 2 {
-      let spatialPassStartedAt = CFAbsoluteTimeGetCurrent()
       let y0 = h / 4, y1 = h - h / 4
       let x0 = w / 4, x1 = w - w / 4
       var cSum = 0.0, cSum2 = 0.0, cN = 0
@@ -146,9 +136,7 @@ enum PhotometricCore {
       let centerVar = Float(variance(cSum, cSum2, cN))
       let borderVar = Float(variance(bSum, bSum2, bN))
       ratio = centerVar / (borderVar + 1e-8)
-      timings.spatialPassMs = (CFAbsoluteTimeGetCurrent() - spatialPassStartedAt) * 1000
 
-      let madStartedAt = CFAbsoluteTimeGetCurrent()
       noiseMad = high.withUnsafeMutableBufferPointer { hp -> Float in
         let p = hp.baseAddress!
         let len = vDSP_Length(highCount)
@@ -159,13 +147,12 @@ enum PhotometricCore {
         vDSP_vsort(p, len, 1)
         return p[highCount / 2]
       }
-      timings.madMs = (CFAbsoluteTimeGetCurrent() - madStartedAt) * 1000
     }
 
-    return ([
+    return [
       meanL, stdL, Float(darkCount) / n, Float(brightCount) / n,
       lapVar, ratio, meanSat, stdSat, colorfulness, warmCool,
       entropy, noiseMad, q1, q2, q3, q4,
-    ], timings)
+    ]
   }
 }
