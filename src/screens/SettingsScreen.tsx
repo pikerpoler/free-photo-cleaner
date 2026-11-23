@@ -47,6 +47,8 @@ const BUG_MAILTO =
   );
 
 const DONATE_URL = 'https://buymeacoffee.com/pikerpoler';
+const PRIVACY_POLICY_URL =
+  'https://pikerpoler.github.io/free-photo-cleaner/privacy-policy.html';
 
 function SortPicker({
   value,
@@ -227,6 +229,14 @@ export function SettingsScreen() {
   const openDonate = useCallback(async () => {
     try {
       await Linking.openURL(DONATE_URL);
+    } catch {
+      Alert.alert('Error', 'Could not open the link.');
+    }
+  }, []);
+
+  const openPrivacyPolicy = useCallback(async () => {
+    try {
+      await Linking.openURL(PRIVACY_POLICY_URL);
     } catch {
       Alert.alert('Error', 'Could not open the link.');
     }
@@ -505,6 +515,9 @@ export function SettingsScreen() {
         </TouchableOpacity>
         <TouchableOpacity style={styles.linkButton} onPress={openDonate}>
           <Text style={styles.linkButtonText}>Buy me a coffee</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.linkButton} onPress={openPrivacyPolicy}>
+          <Text style={styles.linkButtonText}>Privacy Policy</Text>
         </TouchableOpacity>
       </ScrollView>
 
