@@ -6,6 +6,8 @@ import CoreML
 import Accelerate
 
 enum PhotoFeatures {
+  private static var photometricCount = 0
+  private static let photometricLock = NSLock()
 
   // MARK: - Metadata helpers
 
@@ -35,6 +37,11 @@ enum PhotoFeatures {
   // MARK: - Photometric (16)
 
   static func photometric(from image: UIImage) -> [Float] {
+    let startedAt = CFAbsoluteTimeGetCurrent()
+    photometricLock.lock()
+    photometricCount += 1
+    let invocation = photometricCount
+    photometricLock.unlock()
     guard let cg = image.cgImage else {
       return [Float](repeating: 0, count: FeatureSchema.photometricCount)
     }
@@ -45,6 +52,7 @@ enum PhotoFeatures {
     }
     let bytesPerPixel = 4
     let bytesPerRow = bytesPerPixel * w
+    let rasterStartedAt = CFAbsoluteTimeGetCurrent()
     var data = [UInt8](repeating: 0, count: h * bytesPerRow)
     guard let ctx = CGContext(
       data: &data,
@@ -58,151 +66,23 @@ enum PhotoFeatures {
       return [Float](repeating: 0, count: FeatureSchema.photometricCount)
     }
     ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+    let rasterMs = (CFAbsoluteTimeGetCurrent() - rasterStartedAt) * 1000
 
-    var lum = [Float]()
-    lum.reserveCapacity(w * h)
-    var sat = [Float]()
-    sat.reserveCapacity(w * h)
-    var reds = [Float]()
-    var blues = [Float]()
-    var rgDiff = [Float]()
-    var ybDiff = [Float]()
-
-    for y in 0..<h {
-      for x in 0..<w {
-        let i = y * bytesPerRow + x * 4
-        let r = Float(data[i]) / 255
-        let g = Float(data[i + 1]) / 255
-        let b = Float(data[i + 2]) / 255
-        let l = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        lum.append(l)
-        reds.append(r)
-        blues.append(b)
-        let mx = max(r, max(g, b))
-        let mn = min(r, min(g, b))
-        let s = mx > 1e-6 ? (mx - mn) / mx : 0
-        sat.append(s)
-        rgDiff.append(r - g)
-        ybDiff.append(0.5 * (r + g) - b)
-      }
+    let (features, timings) = data.withUnsafeBufferPointer { buf in
+      PhotometricCore.compute(rgba: buf.baseAddress!, width: w, height: h, bytesPerRow: bytesPerRow)
     }
-
-    let n = Float(lum.count)
-    let meanL = lum.reduce(0, +) / n
-    var varL: Float = 0
-    for v in lum { varL += (v - meanL) * (v - meanL) }
-    let stdL = sqrt(varL / n)
-    let fracDark = lum.filter { $0 < 0.05 }.count
-    let fracBright = lum.filter { $0 > 0.95 }.count
-
-    let lapVar = laplacianVariance(lum: lum, w: w, h: h)
-    let (centerVar, borderVar) = centerBorderLaplacian(lum: lum, w: w, h: h)
-    let ratio = centerVar / (borderVar + 1e-8)
-
-    let meanSat = sat.reduce(0, +) / n
-    var varSat: Float = 0
-    for v in sat { varSat += (v - meanSat) * (v - meanSat) }
-    let stdSat = sqrt(varSat / n)
-
-    let rgMean = rgDiff.reduce(0, +) / n
-    let ybMean = ybDiff.reduce(0, +) / n
-    let rgStd = sqrt(rgDiff.map { ($0 - rgMean) * ($0 - rgMean) }.reduce(0, +) / n)
-    let ybStd = sqrt(ybDiff.map { ($0 - ybMean) * ($0 - ybMean) }.reduce(0, +) / n)
-    let colorfulness = sqrt(rgStd * rgStd + ybStd * ybStd) + 0.3 * sqrt(rgMean * rgMean + ybMean * ybMean)
-    let warmCool = reds.reduce(0, +) / n - blues.reduce(0, +) / n
-
-    var hist = [Int](repeating: 0, count: 32)
-    for l in lum {
-      let bin = min(31, max(0, Int(l * 32)))
-      hist[bin] += 1
-    }
-    var entropy: Float = 0
-    for c in hist where c > 0 {
-      let p = Float(c) / n
-      entropy -= p * log2(p)
-    }
-
-    let noiseMad = highPassMad(lum: lum, w: w, h: h)
-    let q1 = Float(lum.filter { $0 < 0.25 }.count) / n
-    let q2 = Float(lum.filter { $0 >= 0.25 && $0 < 0.5 }.count) / n
-    let q3 = Float(lum.filter { $0 >= 0.5 && $0 < 0.75 }.count) / n
-    let q4 = Float(lum.filter { $0 >= 0.75 }.count) / n
-
-    return [
-      meanL, stdL, Float(fracDark) / n, Float(fracBright) / n,
-      lapVar, ratio, meanSat, stdSat, colorfulness, warmCool,
-      entropy, noiseMad, q1, q2, q3, q4,
-    ]
-  }
-
-  private static func laplacianVariance(lum: [Float], w: Int, h: Int) -> Float {
-    guard w > 2, h > 2 else { return 0 }
-    var vals = [Float]()
-    for y in 1..<(h - 1) {
-      for x in 1..<(w - 1) {
-        let c = lum[y * w + x]
-        let lap = -4 * c
-          + lum[(y - 1) * w + x] + lum[(y + 1) * w + x]
-          + lum[y * w + (x - 1)] + lum[y * w + (x + 1)]
-        vals.append(lap)
-      }
-    }
-    guard !vals.isEmpty else { return 0 }
-    let m = vals.reduce(0, +) / Float(vals.count)
-    var v: Float = 0
-    for x in vals { v += (x - m) * (x - m) }
-    return v / Float(vals.count)
-  }
-
-  private static func centerBorderLaplacian(lum: [Float], w: Int, h: Int) -> (Float, Float) {
-    guard w > 2, h > 2 else { return (0, 0) }
-    let y0 = h / 4, y1 = h - h / 4
-    let x0 = w / 4, x1 = w - w / 4
-    func lapAt(_ y: Int, _ x: Int) -> Float {
-      let c = lum[y * w + x]
-      return -4 * c
-        + lum[(y - 1) * w + x] + lum[(y + 1) * w + x]
-        + lum[y * w + (x - 1)] + lum[y * w + (x + 1)]
-    }
-    var center: [Float] = []
-    var border: [Float] = []
-    for y in 1..<(h - 1) {
-      for x in 1..<(w - 1) {
-        let v = lapAt(y, x)
-        if y >= y0 && y < y1 && x >= x0 && x < x1 {
-          center.append(v)
-        } else {
-          border.append(v)
-        }
-      }
-    }
-    func varOf(_ arr: [Float]) -> Float {
-      guard !arr.isEmpty else { return 0 }
-      let m = arr.reduce(0, +) / Float(arr.count)
-      return arr.map { ($0 - m) * ($0 - m) }.reduce(0, +) / Float(arr.count)
-    }
-    return (varOf(center), varOf(border))
-  }
-
-  private static func highPassMad(lum: [Float], w: Int, h: Int) -> Float {
-    guard w > 2, h > 2 else { return 0 }
-    var high = [Float]()
-    for y in 1..<(h - 1) {
-      for x in 1..<(w - 1) {
-        var sum: Float = 0
-        for dy in -1...1 {
-          for dx in -1...1 {
-            sum += lum[(y + dy) * w + (x + dx)]
-          }
-        }
-        let blur = sum / 9
-        high.append(lum[y * w + x] - blur)
-      }
-    }
-    guard !high.isEmpty else { return 0 }
-    let med = high.sorted()[high.count / 2]
-    let mad = high.map { abs($0 - med) }.sorted()[high.count / 2]
-    return mad
+    NSLog(
+      "[ScoreDiag] photometric n=%d pixels=%d rasterMs=%.1f pixelPassMs=%.1f " +
+        "spatialPassMs=%.1f madMs=%.1f totalMs=%.1f",
+      invocation,
+      w * h,
+      rasterMs,
+      timings.pixelPassMs,
+      timings.spatialPassMs,
+      timings.madMs,
+      (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+    )
+    return features
   }
 
   // MARK: - YOLO aggregation (32 = 6 geom + 26 cat)

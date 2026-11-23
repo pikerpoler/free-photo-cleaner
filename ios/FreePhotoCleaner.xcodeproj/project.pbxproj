@@ -21,6 +21,7 @@
 		C1D2E3F31234567800FEAT /* YOLODetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2A3B31234567800FEAT /* YOLODetector.swift */; };
 		C1D2E3F41234567800FEAT /* ScoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2A3B41234567800FEAT /* ScoreModels.swift */; };
 		C1D2E3F51234567800FEAT /* ScoreModels+MLP.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2A3B51234567800FEAT /* ScoreModels+MLP.swift */; };
+		C1D2E3F61234567800FEAT /* PhotometricCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2A3B61234567800FEAT /* PhotometricCore.swift */; };
 		D4E5F6012345678900YOLO /* YOLOXNano.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F6022345678900YOLO /* YOLOXNano.mlpackage */; };
 /* End PBXBuildFile section */
 
@@ -46,6 +47,7 @@
 		F1E2A3B31234567800FEAT /* YOLODetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YOLODetector.swift; path = FreePhotoCleaner/YOLODetector.swift; sourceTree = "<group>"; };
 		F1E2A3B41234567800FEAT /* ScoreModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScoreModels.swift; path = FreePhotoCleaner/ScoreModels.swift; sourceTree = "<group>"; };
 		F1E2A3B51234567800FEAT /* ScoreModels+MLP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "ScoreModels+MLP.swift"; path = "FreePhotoCleaner/ScoreModels+MLP.swift"; sourceTree = "<group>"; };
+		F1E2A3B61234567800FEAT /* PhotometricCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PhotometricCore.swift; path = FreePhotoCleaner/PhotometricCore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -71,6 +73,7 @@
 				B2C3D4E61234567800TRAIN /* CNNTrainerModule.m */,
 				F1E2A3B11234567800FEAT /* FeatureSchema.swift */,
 				F1E2A3B21234567800FEAT /* PhotoFeatures.swift */,
+				F1E2A3B61234567800FEAT /* PhotometricCore.swift */,
 				F1E2A3B31234567800FEAT /* YOLODetector.swift */,
 				F1E2A3B41234567800FEAT /* ScoreModels.swift */,
 				F1E2A3B51234567800FEAT /* ScoreModels+MLP.swift */,
@@ -285,6 +288,7 @@
 				B2C3D4E91234567800TRAIN /* CNNTrainerModule.m in Sources */,
 				C1D2E3F11234567800FEAT /* FeatureSchema.swift in Sources */,
 				C1D2E3F21234567800FEAT /* PhotoFeatures.swift in Sources */,
+				C1D2E3F61234567800FEAT /* PhotometricCore.swift in Sources */,
 				C1D2E3F31234567800FEAT /* YOLODetector.swift in Sources */,
 				D4E5F6012345678900YOLO /* YOLOXNano.mlpackage in Sources */,
 				C1D2E3F41234567800FEAT /* ScoreModels.swift in Sources */,
