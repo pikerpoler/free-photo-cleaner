@@ -2,12 +2,11 @@ import React, {useEffect} from 'react';
 import {GestureHandlerRootView} from 'react-native-gesture-handler';
 import {StyleSheet} from 'react-native';
 import {AppNavigator} from './src/navigation/AppNavigator';
-import {useSettingsStore} from './src/stores/settingsStore';
 import {getDatabase} from './src/services/database';
 
 function App(): React.JSX.Element {
   useEffect(() => {
-    useSettingsStore.getState().loadSettings();
+    console.log('[ScoreDiag] app-open');
     getDatabase();
   }, []);
 

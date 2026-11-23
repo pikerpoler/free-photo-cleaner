@@ -15,6 +15,8 @@ type ProgressListener = (progress: TrainingProgress) => void;
 type CompleteListener = (result: TrainingResult) => void;
 
 let emitter: NativeEventEmitter | null = null;
+let trainerAvailable = false;
+let trainerAvailabilityCheck: Promise<boolean> | null = null;
 
 function getEmitter(): NativeEventEmitter | null {
   if (Platform.OS !== 'ios' || !CNNTrainerModule) return null;
@@ -26,11 +28,20 @@ function getEmitter(): NativeEventEmitter | null {
 
 export async function isTrainerAvailable(): Promise<boolean> {
   if (Platform.OS !== 'ios' || !CNNTrainerModule) return false;
-  try {
-    return Boolean(await CNNTrainerModule.isAvailable());
-  } catch {
-    return false;
+  if (trainerAvailable) return true;
+  if (!trainerAvailabilityCheck) {
+    trainerAvailabilityCheck = Promise.resolve()
+      .then(() => CNNTrainerModule.isAvailable())
+      .then(Boolean)
+      .catch(() => false);
   }
+  const available = await trainerAvailabilityCheck;
+  if (available) {
+    trainerAvailable = true;
+  } else {
+    trainerAvailabilityCheck = null;
+  }
+  return available;
 }
 
 export async function hasActiveModel(): Promise<boolean> {

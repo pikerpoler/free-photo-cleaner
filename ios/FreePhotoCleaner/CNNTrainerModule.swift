@@ -8,12 +8,21 @@ class CNNTrainerModule: RCTEventEmitter {
 
   private var stopRequested = false
   private var isTraining = false
+  private let bridgeQueue = DispatchQueue(label: "com.freephotocleaner.cnntrainer.bridge", qos: .userInitiated)
   private let trainQueue = DispatchQueue(label: "com.freephotocleaner.featuretrainer", qos: .userInitiated)
   private var hasListeners = false
   private let extractor = FeatureExtractor()
   private let bank = FeatureModelBank()
 
   override static func requiresMainQueueSetup() -> Bool { false }
+  @objc override var methodQueue: DispatchQueue { bridgeQueue }
+
+  override init() {
+    super.init()
+    DispatchQueue.global(qos: .userInitiated).async {
+      _ = YOLODetector.shared
+    }
+  }
 
   override func supportedEvents() -> [String]! {
     ["trainingProgress", "trainingComplete"]
@@ -31,15 +40,11 @@ class CNNTrainerModule: RCTEventEmitter {
   }
 
   private func finish(_ resolve: @escaping RCTPromiseResolveBlock, _ value: Any?) {
-    if Thread.isMainThread { resolve(value) } else { DispatchQueue.main.async { resolve(value) } }
+    resolve(value)
   }
 
   private func fail(_ reject: @escaping RCTPromiseRejectBlock, _ code: String, _ message: String) {
-    if Thread.isMainThread {
-      reject(code, message, nil)
-    } else {
-      DispatchQueue.main.async { reject(code, message, nil) }
-    }
+    reject(code, message, nil)
   }
 
   // MARK: - Bridge API
@@ -301,19 +306,33 @@ class CNNTrainerModule: RCTEventEmitter {
                      rejecter reject: @escaping RCTPromiseRejectBlock) {
     trainQueue.async { [weak self] in
       guard let self = self else { return }
+      let startedAt = CFAbsoluteTimeGetCurrent()
       guard self.bank.hasAnyModel() else {
         self.fail(reject, "NO_MODEL", "No trained model")
         return
       }
       var scores: [Double] = []
+      var cacheHits = 0
+      var cacheMisses = 0
+      var extractMs = 0.0
+      var predictMs = 0.0
       for uri in uris {
         if let vec = self.extractor.extractVector(uri: uri) {
+          let extraction = self.extractor.lastDiagnostics
+          if extraction.cacheHit { cacheHits += 1 } else { cacheMisses += 1 }
+          extractMs += extraction.totalMs
+          let predictStartedAt = CFAbsoluteTimeGetCurrent()
           let p = self.bank.predict(vec, modelId: self.bank.activeModelId)
+          predictMs += (CFAbsoluteTimeGetCurrent() - predictStartedAt) * 1000
           scores.append(Double(p))
         } else {
+          let extraction = self.extractor.lastDiagnostics
+          if extraction.cacheHit { cacheHits += 1 } else { cacheMisses += 1 }
+          extractMs += extraction.totalMs
           scores.append(0.5)
         }
       }
+      NSLog("[ScoreDiag] predict count=%d hits=%d misses=%d extractMs=%.1f modelMs=%.1f wallMs=%.1f", uris.count, cacheHits, cacheMisses, extractMs, predictMs, (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
       self.finish(resolve, scores)
     }
   }

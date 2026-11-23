@@ -174,6 +174,8 @@ export async function stampLocalAvailability(
 
 export interface ProgressiveLoadController {
   cancel: () => void;
+  pause: () => void;
+  resume: () => void;
 }
 
 export type OnBatchLoaded = (
@@ -191,10 +193,29 @@ export function loadMediaProgressively(
   dateFilter?: DateFilter,
 ): ProgressiveLoadController {
   let cancelled = false;
+  let paused = false;
+  let resumePromise: Promise<void> | null = null;
+  let resolveResume: (() => void) | null = null;
 
   const controller: ProgressiveLoadController = {
     cancel: () => {
       cancelled = true;
+      resolveResume?.();
+      resolveResume = null;
+      resumePromise = null;
+    },
+    pause: () => {
+      if (paused) return;
+      paused = true;
+      resumePromise = new Promise<void>(resolve => {
+        resolveResume = resolve;
+      });
+    },
+    resume: () => {
+      paused = false;
+      resolveResume?.();
+      resolveResume = null;
+      resumePromise = null;
     },
   };
 
@@ -203,6 +224,10 @@ export function loadMediaProgressively(
     let hasMore = true;
 
     while (hasMore && !cancelled) {
+      if (paused && resumePromise) {
+        await resumePromise;
+      }
+      if (cancelled) return;
       const result = await fetchMediaAssets(type, cursor, dateFilter);
       if (cancelled) return;
       onBatch(result.assets, !result.hasMore);

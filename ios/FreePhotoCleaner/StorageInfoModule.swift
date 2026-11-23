@@ -3,6 +3,9 @@ import Photos
 
 @objc(StorageInfoModule)
 class StorageInfoModule: NSObject {
+  private let bridgeQueue = DispatchQueue(label: "com.freephotocleaner.storage.bridge", qos: .utility)
+
+  @objc var methodQueue: DispatchQueue { bridgeQueue }
 
   @objc
   static func requiresMainQueueSetup() -> Bool {

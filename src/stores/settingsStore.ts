@@ -109,30 +109,46 @@ function getDefaultDateFilter(): DateFilter {
   return {enabled: false, from: thirtyDaysAgo, to: now};
 }
 
+function readPersistedSettings() {
+  const rawModel = getSetting(KEYS.AI_MODEL, 'catboost' as string);
+  const rawSort = getSetting<string | null>(KEYS.AI_SORT_MODEL, null);
+  return {
+    photoSort: getSetting(KEYS.PHOTO_SORT, 'ai' as SortMode),
+    videoSort: getSetting(KEYS.VIDEO_SORT, 'largest_first' as SortMode),
+    photoFilters: {
+      ...DEFAULT_PHOTO_FILTERS,
+      ...getSetting(KEYS.PHOTO_FILTERS, DEFAULT_PHOTO_FILTERS),
+    },
+    videoFilters: getSetting(KEYS.VIDEO_FILTERS, DEFAULT_VIDEO_FILTERS),
+    dateFilter: getSetting(KEYS.DATE_FILTER, getDefaultDateFilter()),
+    theme: getSetting(KEYS.THEME, 'system' as const),
+    aiModel: migrateModelId(rawModel),
+    aiSortModel: rawSort ? migrateModelId(rawSort) : null,
+    aiBatchSize: getSetting(KEYS.AI_BATCH_SIZE, 8),
+    aiStepSize: getSetting(KEYS.AI_STEP_SIZE, 0.001),
+    aiEpochs: getSetting(KEYS.AI_EPOCHS, 80),
+    aiTrainResize: clampTrainResize(
+      getSetting(KEYS.AI_TRAIN_RESIZE, DEFAULT_TRAIN_RESIZE),
+    ),
+    aiLrScheduler: getSetting(KEYS.AI_LR_SCHEDULER, 'constant' as LrSchedulerId),
+    aiStepGamma: getSetting(KEYS.AI_STEP_GAMMA, 0.5),
+    aiStepSizeEpochs: getSetting(KEYS.AI_STEP_SIZE_EPOCHS, 5),
+    aiExpDecay: getSetting(KEYS.AI_EXP_DECAY, 0.95),
+    aiLogisticC: getSetting(KEYS.AI_LOGISTIC_C, 1),
+    aiLogisticMaxIter: getSetting(KEYS.AI_LOGISTIC_MAX_ITER, 500),
+    aiCatboostLearningRate: getSetting(KEYS.AI_CATBOOST_LR, 0.1),
+    aiCatboostDepth: getSetting(KEYS.AI_CATBOOST_DEPTH, 3),
+    aiCatboostMinLeaf: getSetting(KEYS.AI_CATBOOST_MIN_LEAF, 8),
+    aiCatboostMaxNewTrees: getSetting(KEYS.AI_CATBOOST_MAX_NEW_TREES, 40),
+    aiAugmentations: {
+      ...DEFAULT_AUGMENTATIONS,
+      ...getSetting(KEYS.AI_AUGMENTATIONS, DEFAULT_AUGMENTATIONS),
+    },
+  };
+}
+
 export const useSettingsStore = create<SettingsState>((set, get) => ({
-  photoSort: 'ai',
-  videoSort: 'largest_first',
-  photoFilters: DEFAULT_PHOTO_FILTERS,
-  videoFilters: DEFAULT_VIDEO_FILTERS,
-  dateFilter: getDefaultDateFilter(),
-  theme: 'system',
-  aiModel: 'catboost',
-  aiSortModel: null,
-  aiBatchSize: 8,
-  aiStepSize: 0.001,
-  aiEpochs: 80,
-  aiTrainResize: DEFAULT_TRAIN_RESIZE,
-  aiLrScheduler: 'constant',
-  aiStepGamma: 0.5,
-  aiStepSizeEpochs: 5,
-  aiExpDecay: 0.95,
-  aiLogisticC: 1,
-  aiLogisticMaxIter: 500,
-  aiCatboostLearningRate: 0.1,
-  aiCatboostDepth: 3,
-  aiCatboostMinLeaf: 8,
-  aiCatboostMaxNewTrees: 40,
-  aiAugmentations: DEFAULT_AUGMENTATIONS,
+  ...readPersistedSettings(),
 
   setPhotoSort: (sort: SortMode) => {
     set({photoSort: sort});
@@ -258,40 +274,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   loadSettings: () => {
-    const rawModel = getSetting(KEYS.AI_MODEL, 'catboost' as string);
-    const rawSort = getSetting<string | null>(KEYS.AI_SORT_MODEL, null);
-    set({
-      photoSort: getSetting(KEYS.PHOTO_SORT, 'ai' as SortMode),
-      videoSort: getSetting(KEYS.VIDEO_SORT, 'largest_first' as SortMode),
-      photoFilters: {
-        ...DEFAULT_PHOTO_FILTERS,
-        ...getSetting(KEYS.PHOTO_FILTERS, DEFAULT_PHOTO_FILTERS),
-      },
-      videoFilters: getSetting(KEYS.VIDEO_FILTERS, DEFAULT_VIDEO_FILTERS),
-      dateFilter: getSetting(KEYS.DATE_FILTER, getDefaultDateFilter()),
-      theme: getSetting(KEYS.THEME, 'system' as const),
-      aiModel: migrateModelId(rawModel),
-      aiSortModel: rawSort ? migrateModelId(rawSort) : null,
-      aiBatchSize: getSetting(KEYS.AI_BATCH_SIZE, 8),
-      aiStepSize: getSetting(KEYS.AI_STEP_SIZE, 0.001),
-      aiEpochs: getSetting(KEYS.AI_EPOCHS, 80),
-      aiTrainResize: clampTrainResize(
-        getSetting(KEYS.AI_TRAIN_RESIZE, DEFAULT_TRAIN_RESIZE),
-      ),
-      aiLrScheduler: getSetting(KEYS.AI_LR_SCHEDULER, 'constant' as LrSchedulerId),
-      aiStepGamma: getSetting(KEYS.AI_STEP_GAMMA, 0.5),
-      aiStepSizeEpochs: getSetting(KEYS.AI_STEP_SIZE_EPOCHS, 5),
-      aiExpDecay: getSetting(KEYS.AI_EXP_DECAY, 0.95),
-      aiLogisticC: getSetting(KEYS.AI_LOGISTIC_C, 1),
-      aiLogisticMaxIter: getSetting(KEYS.AI_LOGISTIC_MAX_ITER, 500),
-      aiCatboostLearningRate: getSetting(KEYS.AI_CATBOOST_LR, 0.1),
-      aiCatboostDepth: getSetting(KEYS.AI_CATBOOST_DEPTH, 3),
-      aiCatboostMinLeaf: getSetting(KEYS.AI_CATBOOST_MIN_LEAF, 8),
-      aiCatboostMaxNewTrees: getSetting(KEYS.AI_CATBOOST_MAX_NEW_TREES, 40),
-      aiAugmentations: {
-        ...DEFAULT_AUGMENTATIONS,
-        ...getSetting(KEYS.AI_AUGMENTATIONS, DEFAULT_AUGMENTATIONS),
-      },
-    });
+    set(readPersistedSettings());
   },
 }));
