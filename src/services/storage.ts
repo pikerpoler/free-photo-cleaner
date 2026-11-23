@@ -32,9 +32,47 @@ const KEYS = {
   LIBRARY_TOTAL_SPACE: 'library.totalSpace',
   LIBRARY_PHOTOS_SIZE: 'library.photosSize',
   LIBRARY_VIDEOS_SIZE: 'library.videosSize',
+  LIFETIME_PHOTO_DELETED_COUNT: 'lifetime.photoDeletedCount',
+  LIFETIME_PHOTO_DELETED_BYTES: 'lifetime.photoDeletedBytes',
+  LIFETIME_VIDEO_DELETED_COUNT: 'lifetime.videoDeletedCount',
+  LIFETIME_VIDEO_DELETED_BYTES: 'lifetime.videoDeletedBytes',
   /** One-time backfill of swipe_decisions from kept_assets + pending_deletes */
   SWIPE_DECISIONS_BACKFILL_DONE: 'migrate.swipeDecisionsBackfillDone',
 } as const;
+
+export type MediaTypeForLifetime = 'photo' | 'video';
+
+export function getLifetimeDeletedStats(mediaType: MediaTypeForLifetime): {
+  count: number;
+  bytes: number;
+} {
+  if (mediaType === 'photo') {
+    return {
+      count: getSetting(KEYS.LIFETIME_PHOTO_DELETED_COUNT, 0),
+      bytes: getSetting(KEYS.LIFETIME_PHOTO_DELETED_BYTES, 0),
+    };
+  }
+  return {
+    count: getSetting(KEYS.LIFETIME_VIDEO_DELETED_COUNT, 0),
+    bytes: getSetting(KEYS.LIFETIME_VIDEO_DELETED_BYTES, 0),
+  };
+}
+
+export function addLifetimeDeletedStats(
+  mediaType: MediaTypeForLifetime,
+  count: number,
+  bytes: number,
+): void {
+  if (count <= 0 && bytes <= 0) return;
+  const prev = getLifetimeDeletedStats(mediaType);
+  if (mediaType === 'photo') {
+    setSetting(KEYS.LIFETIME_PHOTO_DELETED_COUNT, prev.count + count);
+    setSetting(KEYS.LIFETIME_PHOTO_DELETED_BYTES, prev.bytes + bytes);
+  } else {
+    setSetting(KEYS.LIFETIME_VIDEO_DELETED_COUNT, prev.count + count);
+    setSetting(KEYS.LIFETIME_VIDEO_DELETED_BYTES, prev.bytes + bytes);
+  }
+}
 
 export function aiTrainingHistoryKey(modelId: string): string {
   return `ai.trainingHistory.${modelId}`;

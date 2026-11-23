@@ -1,5 +1,6 @@
 import React from 'react';
 import {StyleSheet, Text, TouchableOpacity, View, useColorScheme} from 'react-native';
+import {RotateCcwIcon} from './RotateCcwIcon';
 import {formatFileSize} from '../utils/format';
 import type {ReviewAggregateStats} from '../stores/queueStore';
 
@@ -37,6 +38,9 @@ export function ReviewHeader({
         <Text style={[styles.statLine, isDark && styles.textDark]}>
           {stats.keptCount} Kept {formatFileSize(stats.keptBytes)}
         </Text>
+        <Text style={[styles.statLine, isDark && styles.textDark]}>
+          {stats.deletedCount} Deleted {formatFileSize(stats.deletedBytes)}
+        </Text>
       </View>
       <View style={styles.rightCol}>
         <TouchableOpacity
@@ -54,16 +58,16 @@ export function ReviewHeader({
               styles.deleteText,
               pendingCount <= 0 && styles.textDisabled,
             ]}>
-            Delete
+            Move {pendingCount} to trash
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
           onPress={onUndo}
           disabled={!canUndo}
-          style={[styles.undoButton, !canUndo && styles.btnDisabled]}>
-          <Text style={[styles.undoText, !canUndo && styles.textDisabled]}>
-            Undo
-          </Text>
+          style={[styles.undoButton, !canUndo && styles.btnDisabled]}
+          accessibilityRole="button"
+          accessibilityLabel="Undo">
+          <RotateCcwIcon color="#fff" size={22} strokeWidth={2.5} />
         </TouchableOpacity>
       </View>
     </View>
@@ -97,36 +101,33 @@ const styles = StyleSheet.create({
     color: '#e5e5ea',
   },
   undoButton: {
-    paddingHorizontal: 18,
-    paddingVertical: 12,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: '#007AFF',
-    borderRadius: 14,
     alignItems: 'center',
-    minWidth: 108,
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
   },
   deleteButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 18,
+    paddingHorizontal: 14,
     paddingVertical: 12,
     backgroundColor: '#ff3b30',
     borderRadius: 14,
     gap: 4,
-    minWidth: 108,
+    maxWidth: 160,
   },
   btnDisabled: {
     opacity: 0.4,
   },
-  undoText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '600',
-  },
   deleteText: {
     color: '#fff',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
+    textAlign: 'center',
   },
   textDisabled: {
     color: '#ccc',

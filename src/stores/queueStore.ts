@@ -43,6 +43,10 @@ import {
   captureTrainingExample,
   waitForTrainingCaptures,
 } from '../services/trainingCapture';
+import {
+  addLifetimeDeletedStats,
+  getLifetimeDeletedStats,
+} from '../services/storage';
 
 type UndoEntry = {
   type: 'keep' | 'delete';
@@ -57,6 +61,8 @@ export type ReviewAggregateStats = {
   pendingDeleteBytes: number;
   keptCount: number;
   keptBytes: number;
+  deletedCount: number;
+  deletedBytes: number;
 };
 
 interface QueueState {
@@ -514,6 +520,8 @@ function buildReviewAggregates(): {
   const videoPend = getPendingDeleteAggregate('video');
   const photoKept = getKeptAggregate('photo');
   const videoKept = getKeptAggregate('video');
+  const photoDeleted = getLifetimeDeletedStats('photo');
+  const videoDeleted = getLifetimeDeletedStats('video');
   return {
     photoEligibleCount: photoTR.count,
     photoICloudRemainder: photoHasICloudRemainder(),
@@ -524,6 +532,8 @@ function buildReviewAggregates(): {
       pendingDeleteBytes: photoPend.totalBytes,
       keptCount: photoKept.count,
       keptBytes: photoKept.totalBytes,
+      deletedCount: photoDeleted.count,
+      deletedBytes: photoDeleted.bytes,
     },
     videoReviewStats: {
       toReviewCount: videoTR.count,
@@ -532,6 +542,8 @@ function buildReviewAggregates(): {
       pendingDeleteBytes: videoPend.totalBytes,
       keptCount: videoKept.count,
       keptBytes: videoKept.totalBytes,
+      deletedCount: videoDeleted.count,
+      deletedBytes: videoDeleted.bytes,
     },
   };
 }
@@ -551,6 +563,7 @@ function reviewStatsPartial(
     const photoTR = getPhotoToReviewStats();
     const photoPend = getPendingDeleteAggregate('photo');
     const photoKept = getKeptAggregate('photo');
+    const photoDeleted = getLifetimeDeletedStats('photo');
     return {
       photoEligibleCount: photoTR.count,
       photoICloudRemainder: photoHasICloudRemainder(),
@@ -561,6 +574,8 @@ function reviewStatsPartial(
         pendingDeleteBytes: photoPend.totalBytes,
         keptCount: photoKept.count,
         keptBytes: photoKept.totalBytes,
+        deletedCount: photoDeleted.count,
+        deletedBytes: photoDeleted.bytes,
       },
     };
   }
@@ -568,6 +583,7 @@ function reviewStatsPartial(
     const videoTR = getVideoToReviewStats();
     const videoPend = getPendingDeleteAggregate('video');
     const videoKept = getKeptAggregate('video');
+    const videoDeleted = getLifetimeDeletedStats('video');
     return {
       videoReviewStats: {
         toReviewCount: videoTR.count,
@@ -576,6 +592,8 @@ function reviewStatsPartial(
         pendingDeleteBytes: videoPend.totalBytes,
         keptCount: videoKept.count,
         keptBytes: videoKept.totalBytes,
+        deletedCount: videoDeleted.count,
+        deletedBytes: videoDeleted.bytes,
       },
     };
   }
@@ -1553,6 +1571,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     }
 
     const uris = pending.map(p => p.uri);
+    const flushBytes = pending.reduce((sum, p) => sum + (p.fileSize ?? 0), 0);
 
     const countKey =
       type === 'photo' ? 'photoPendingCount' : 'videoPendingCount';
@@ -1561,6 +1580,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (Platform.OS === 'ios') {
       const result = await batchDeleteAssets(uris);
       if (result.success) {
+        addLifetimeDeletedStats(type, pending.length, flushBytes);
         if (type === 'photo') {
           deleteCachedFeatures(uris).catch(() => {});
         }
@@ -1587,6 +1607,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
         deleteCachedFeatures(deletedUris).catch(() => {});
       }
       if (deletedUris.length === uris.length) {
+        addLifetimeDeletedStats(type, pending.length, flushBytes);
         clearPendingDeletesByType(type);
         set({
           [countKey]: 0,
