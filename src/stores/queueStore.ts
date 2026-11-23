@@ -1,5 +1,5 @@
-import {create} from 'zustand';
-import {Alert, Platform} from 'react-native';
+import { create } from 'zustand';
+import { Alert, Platform } from 'react-native';
 import {
   DateFilter,
   MediaAsset,
@@ -15,7 +15,7 @@ import {
   stampLocalAvailability,
   applyCachedLocalFlags,
 } from '../services/media';
-import {batchDeleteAssets} from '../services/nativeStorage';
+import { batchDeleteAssets } from '../services/nativeStorage';
 import {
   getKeptAssetIds,
   markAssetKept,
@@ -33,15 +33,22 @@ import {
   getPendingDeleteAggregate,
   getKeptAggregate,
 } from '../services/database';
-import {useAIStore} from './aiStore';
-import {deleteCachedFeatures, pruneFeatureCacheFromUris} from '../services/cnnTrainer';
+import { useAIStore } from './aiStore';
+import {
+  deleteCachedFeatures,
+  pruneFeatureCacheFromUris,
+} from '../services/cnnTrainer';
 import {
   cancelTrainingExample,
   captureTrainingExample,
   waitForTrainingCaptures,
 } from '../services/trainingCapture';
 
-type UndoEntry = {type: 'keep' | 'delete'; asset: MediaAsset; queue: MediaType};
+type UndoEntry = {
+  type: 'keep' | 'delete';
+  asset: MediaAsset;
+  queue: MediaType;
+};
 
 export type ReviewAggregateStats = {
   toReviewCount: number;
@@ -119,6 +126,8 @@ let currentDateFilter: DateFilter | undefined;
 
 /** Max scored photos ahead of (and including) the current card for AI sort. */
 const AI_QUEUE_CAP = 100;
+/** Reveal the deck after this many photos have been scored. */
+const AI_INTERACTIVE_COUNT = 20;
 /** Unscored candidates scored per turnover refill. */
 const AI_SCORE_BATCH = 20;
 /** Kick turnover refill when remaining window drops to this (inclusive). */
@@ -151,19 +160,23 @@ let aiFillPromiseRunId: number | null = null;
 let aiFillRunId = 0;
 /** True once the window first reaches AI_QUEUE_CAP; enables turnover refills. */
 let aiQueuePrimed = false;
+/** True after the first scored window has been published to the swipe deck. */
+let aiDeckInteractive = false;
+/** Number of photos scored during the current initial fill. */
+let aiScoresThisFill = 0;
 /** CameraRoll reported no more pages for the current photo load. */
 let photoScanDone = false;
 /** Dropped ids to skip when sampling the current refill batch. */
 let aiRefillExcludeIds = new Set<string>();
 
-type AIScoreStamp = {modelId: string; trainedAt: number};
+type AIScoreStamp = { modelId: string; trainedAt: number };
 /** Model checkpoint that last scored the current AI queue (not a full reset). */
 let aiQueueScoreStamp: AIScoreStamp | null = null;
 
 function activeScoreStamp(): AIScoreStamp {
-  const {hasModel, activeModelInfo} = useAIStore.getState();
+  const { hasModel, activeModelInfo } = useAIStore.getState();
   if (!hasModel || !activeModelInfo) {
-    return {modelId: '', trainedAt: 0};
+    return { modelId: '', trainedAt: 0 };
   }
   return {
     modelId: activeModelInfo.modelId,
@@ -409,7 +422,7 @@ async function stampAssets(assets: MediaAsset[]): Promise<MediaAsset[]> {
   updateCatalogLocalFlags(
     stamped
       .filter(a => a.isLocal !== undefined)
-      .map(a => ({id: a.id, isLocal: Boolean(a.isLocal)})),
+      .map(a => ({ id: a.id, isLocal: Boolean(a.isLocal) })),
   );
   return assets;
 }
@@ -450,14 +463,14 @@ async function admitLocalPrefix(
 
 function refreshPhotoDeck(
   set: (
-    partial:
-      | Partial<QueueState>
-      | ((state: QueueState) => Partial<QueueState>),
+    partial: Partial<QueueState> | ((state: QueueState) => Partial<QueueState>),
   ) => void,
   get: () => QueueState,
 ): void {
+  if (currentPhotoSort === 'ai') return;
   const generation = photoLoadGeneration;
-  void (async () => { // eslint-disable-line no-void
+  void (async () => {
+    // eslint-disable-line no-void
     const state = get();
     const admitted = await admitLocalPrefix(state.photoQueue, state.photoIndex);
     if (generation !== photoLoadGeneration) return;
@@ -472,7 +485,7 @@ function sumFileSizes(assets: MediaAsset[]): number {
   return assets.reduce((sum, a) => sum + a.fileSize, 0);
 }
 
-function getPhotoToReviewStats(): {count: number; totalBytes: number} {
+function getPhotoToReviewStats(): { count: number; totalBytes: number } {
   const eligible = filterEligible(
     photoRawCache,
     'photo',
@@ -486,7 +499,7 @@ function getPhotoToReviewStats(): {count: number; totalBytes: number} {
   };
 }
 
-function getVideoToReviewStats(): {count: number; totalBytes: number} {
+function getVideoToReviewStats(): { count: number; totalBytes: number } {
   const eligible = filterEligible(
     videoRawCache,
     'video',
@@ -534,7 +547,9 @@ function buildReviewAggregates(): {
   };
 }
 
-function reviewStatsPartial(type?: MediaType): Partial<
+function reviewStatsPartial(
+  type?: MediaType,
+): Partial<
   Pick<
     QueueState,
     | 'photoEligibleCount'
@@ -596,22 +611,19 @@ function restoreUndoneAsset(
   queue: MediaAsset[],
   index: number,
   asset: MediaAsset,
-): {queue: MediaAsset[]; index: number} {
+): { queue: MediaAsset[]; index: number } {
   if (index > 0 && queue[index - 1]?.id === asset.id) {
-    return {queue, index: index - 1};
+    return { queue, index: index - 1 };
   }
   if (queue[index]?.id === asset.id) {
-    return {queue, index};
+    return { queue, index };
   }
 
   const removedBefore = queue
     .slice(0, index)
     .reduce((count, item) => count + (item.id === asset.id ? 1 : 0), 0);
   const without = queue.filter(item => item.id !== asset.id);
-  const insertAt = Math.max(
-    0,
-    Math.min(index - removedBefore, without.length),
-  );
+  const insertAt = Math.max(0, Math.min(index - removedBefore, without.length));
   return {
     queue: [...without.slice(0, insertAt), asset, ...without.slice(insertAt)],
     index: insertAt,
@@ -651,9 +663,7 @@ function rebuildAIQueueFromScores(
   // makes undo pop the button without bringing the photo back.
   const eligibleIds = new Set(eligible.map(a => a.id));
   const undoIds = new Set(state.photoUndoStack.map(entry => entry.asset.id));
-  const pastKept = past.filter(
-    a => eligibleIds.has(a.id) || undoIds.has(a.id),
-  );
+  const pastKept = past.filter(a => eligibleIds.has(a.id) || undoIds.has(a.id));
   // Only a normal refill pins the on-screen pair. A fresh fill, model
   // rescore, or hard reset re-ranks them with the rest of the window.
   const currentKept =
@@ -702,9 +712,7 @@ function rebuildAIQueueFromScores(
 
 async function rescoreCurrentAIQueue(
   set: (
-    partial:
-      | Partial<QueueState>
-      | ((state: QueueState) => Partial<QueueState>),
+    partial: Partial<QueueState> | ((state: QueueState) => Partial<QueueState>),
   ) => void,
   get: () => QueueState,
 ): Promise<void> {
@@ -712,7 +720,11 @@ async function rescoreCurrentAIQueue(
   const state = get();
   const past = state.photoQueue.slice(0, state.photoIndex);
   const remaining = state.photoQueue.slice(state.photoIndex);
-  logScoreDiag(`rescoreCurrentAIQueue start remaining=${remaining.length}`, get);
+  logScoreDiag(
+    `rescoreCurrentAIQueue start remaining=${remaining.length}`,
+    get,
+  );
+  let interactive = false;
   set({
     photoQueue: past,
     photoIndex: past.length,
@@ -722,15 +734,43 @@ async function rescoreCurrentAIQueue(
   });
   if (remaining.length > 0) {
     useAIStore.getState().clearScoresForIds(remaining.map(a => a.id));
-    const scoreStartedAt = Date.now();
-    await useAIStore.getState().scoreAssets(remaining);
-    console.log(`[ScoreDiag] scoreBatch reason=rescore size=${remaining.length} stampMs=0 scoreMs=${Date.now() - scoreStartedAt}`);
+    for (let i = 0; i < remaining.length; i += AI_SCORE_BATCH) {
+      const batch = remaining.slice(i, i + AI_SCORE_BATCH);
+      const scoreStartedAt = Date.now();
+      await useAIStore.getState().scoreAssets(batch);
+      console.log(
+        `[ScoreDiag] scoreBatch reason=rescore size=${
+          batch.length
+        } stampMs=0 scoreMs=${Date.now() - scoreStartedAt}`,
+      );
+
+      const built = rebuildAIQueueFromScores(get, interactive);
+      const canReveal =
+        built.remaining >= AI_INTERACTIVE_COUNT ||
+        i + batch.length >= remaining.length;
+      if (canReveal && !interactive) {
+        set({
+          photoQueue: built.queue,
+          photoIndex: built.index,
+          isLoadingPhotos: false,
+          isScoringPhotos: false,
+          ...reviewStatsPartial(),
+        });
+        interactive = true;
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+      } else if (interactive) {
+        set({
+          photoQueue: built.queue,
+          photoIndex: built.index,
+          isLoadingPhotos: false,
+          isScoringPhotos: false,
+          ...reviewStatsPartial(),
+        });
+      }
+    }
   }
   if (currentPhotoSort !== 'ai') return;
-  const built = rebuildAIQueueFromScores(get, false);
-  if (built.remaining >= AI_QUEUE_CAP) {
-    aiQueuePrimed = true;
-  }
+  const built = rebuildAIQueueFromScores(get, interactive);
   set({
     photoQueue: built.queue,
     photoIndex: built.index,
@@ -743,9 +783,7 @@ async function rescoreCurrentAIQueue(
 
 async function runAIQueueFill(
   set: (
-    partial:
-      | Partial<QueueState>
-      | ((state: QueueState) => Partial<QueueState>),
+    partial: Partial<QueueState> | ((state: QueueState) => Partial<QueueState>),
   ) => void,
   get: () => QueueState,
   reason: string,
@@ -755,10 +793,7 @@ async function runAIQueueFill(
 
   try {
     while (currentPhotoSort === 'ai' && runId === aiFillRunId) {
-      const built = rebuildAIQueueFromScores(get, aiQueuePrimed);
-      if (!aiQueuePrimed && built.remaining >= AI_QUEUE_CAP) {
-        aiQueuePrimed = true;
-      }
+      const built = rebuildAIQueueFromScores(get, aiDeckInteractive);
 
       const scoreById = useAIStore.getState().scoreById;
       const eligible = filterForDeck(
@@ -781,25 +816,26 @@ async function runAIQueueFill(
         break;
       }
 
-      const needInitialFill =
-        !aiQueuePrimed &&
-        built.remaining < AI_QUEUE_CAP &&
-        unscoredAll.length > 0;
+      const initialFillComplete =
+        aiScoresThisFill >= AI_QUEUE_CAP || unscoredAll.length === 0;
+      if (!aiQueuePrimed && initialFillComplete) {
+        aiQueuePrimed = true;
+      }
+
+      const needInitialFill = !aiQueuePrimed && unscoredAll.length > 0;
 
       const needTurnover =
         aiQueuePrimed && built.remaining <= AI_REFILL_THRESHOLD;
 
-      // Stay on "Scoring photos..." for the whole first window. A later
-      // turnover refill only takes the screen when the deck is already empty.
       const showSpinner =
-        needInitialFill ||
+        !aiDeckInteractive ||
         (built.queue.length === 0 &&
           (needTurnover || photoRawCache.length === 0));
       set({
         photoQueue: built.queue,
         photoIndex: built.index,
         isLoadingPhotos: showSpinner,
-        isScoringPhotos: needInitialFill || (showSpinner && needTurnover),
+        isScoringPhotos: showSpinner && (needInitialFill || needTurnover),
         ...reviewStatsPartial(),
       });
 
@@ -830,8 +866,7 @@ async function runAIQueueFill(
         const freshScoreById = useAIStore.getState().scoreById;
         let unscored = eligible.filter(
           a =>
-            freshScoreById[a.id] === undefined &&
-            !aiRefillExcludeIds.has(a.id),
+            freshScoreById[a.id] === undefined && !aiRefillExcludeIds.has(a.id),
         );
         let batch = sampleRandom(unscored, AI_SCORE_BATCH);
         if (batch.length < AI_SCORE_BATCH) {
@@ -858,7 +893,11 @@ async function runAIQueueFill(
         }
         const scoreStartedAt = Date.now();
         await useAIStore.getState().scoreAssets(batch);
-        console.log(`[ScoreDiag] scoreBatch reason=${reason} size=${batch.length} stampMs=${stampMs} scoreMs=${Date.now() - scoreStartedAt}`);
+        console.log(
+          `[ScoreDiag] scoreBatch reason=${reason} size=${
+            batch.length
+          } stampMs=${stampMs} scoreMs=${Date.now() - scoreStartedAt}`,
+        );
         aiRefillExcludeIds = new Set();
         continue;
       }
@@ -873,7 +912,32 @@ async function runAIQueueFill(
       }
       const scoreStartedAt = Date.now();
       await useAIStore.getState().scoreAssets(batch);
-      console.log(`[ScoreDiag] scoreBatch reason=${reason} size=${batch.length} stampMs=${stampMs} scoreMs=${Date.now() - scoreStartedAt}`);
+      console.log(
+        `[ScoreDiag] scoreBatch reason=${reason} size=${
+          batch.length
+        } stampMs=${stampMs} scoreMs=${Date.now() - scoreStartedAt}`,
+      );
+      if (!aiQueuePrimed) {
+        aiScoresThisFill += batch.length;
+      }
+
+      if (!aiDeckInteractive) {
+        const revealed = rebuildAIQueueFromScores(get, false);
+        if (
+          revealed.remaining >= AI_INTERACTIVE_COUNT ||
+          (aiScoresThisFill > 0 && unscoredAll.length <= batch.length)
+        ) {
+          set({
+            photoQueue: revealed.queue,
+            photoIndex: revealed.index,
+            isLoadingPhotos: false,
+            isScoringPhotos: false,
+            ...reviewStatsPartial(),
+          });
+          aiDeckInteractive = true;
+          await new Promise<void>(resolve => setTimeout(resolve, 0));
+        }
+      }
     }
   } finally {
     logScoreDiag(`ensureAIQueueFilled leave reason=${reason}`, get);
@@ -882,9 +946,7 @@ async function runAIQueueFill(
 
 async function ensureAIQueueFilled(
   set: (
-    partial:
-      | Partial<QueueState>
-      | ((state: QueueState) => Partial<QueueState>),
+    partial: Partial<QueueState> | ((state: QueueState) => Partial<QueueState>),
   ) => void,
   get: () => QueueState,
   reason = 'initial',
@@ -914,9 +976,7 @@ async function ensureAIQueueFilled(
 
 function maybeRefillAIQueue(
   set: (
-    partial:
-      | Partial<QueueState>
-      | ((state: QueueState) => Partial<QueueState>),
+    partial: Partial<QueueState> | ((state: QueueState) => Partial<QueueState>),
   ) => void,
   get: () => QueueState,
 ): void {
@@ -1062,7 +1122,7 @@ function catalogDateBounds(dateFilter?: DateFilter): {
   startOfFrom.setHours(0, 0, 0, 0);
   const endOfTo = new Date(dateFilter.to);
   endOfTo.setHours(23, 59, 59, 999);
-  return {from: startOfFrom.getTime(), to: endOfTo.getTime()};
+  return { from: startOfFrom.getTime(), to: endOfTo.getTime() };
 }
 
 const initialReview = buildReviewAggregates();
@@ -1089,7 +1149,11 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   loadQueue: (type, sort, photoFilters, videoFilters, dateFilter) => {
     const isPhoto = type === 'photo';
     if (isPhoto) {
-      console.log(`[ScoreDiag] loadQueue start sort=${sort} filter=${JSON.stringify(photoFilters ?? {})}`);
+      console.log(
+        `[ScoreDiag] loadQueue start sort=${sort} filter=${JSON.stringify(
+          photoFilters ?? {},
+        )}`,
+      );
     }
 
     if (isPhoto) {
@@ -1100,6 +1164,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       currentPhotoFilters = photoFilters;
       aiFillRunId += 1;
       aiQueuePrimed = false;
+      aiDeckInteractive = false;
+      aiScoresThisFill = 0;
       aiRefillExcludeIds = new Set();
       aiQueueScoreStamp = null;
       photoScanDone = false;
@@ -1126,7 +1192,9 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const startScan = (hydrated: MediaAsset[]) => {
       if (isPhoto && generation !== photoLoadGeneration) return;
       if (isPhoto) {
-        console.log(`[ScoreDiag] photo-scan-start hydrated=${hydrated.length} pool=${photoRawCache.length} scanDone=${photoScanDone}`);
+        console.log(
+          `[ScoreDiag] photo-scan-start hydrated=${hydrated.length} pool=${photoRawCache.length} scanDone=${photoScanDone}`,
+        );
       }
 
       if (hydrated.length > 0) {
@@ -1153,7 +1221,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
             currentDateFilter,
           );
           if (isPhoto) {
-            void (async () => { // eslint-disable-line no-void
+            void (async () => {
+              // eslint-disable-line no-void
               const admitted = await admitLocalPrefix(queue, 0);
               if (generation !== photoLoadGeneration) return;
               set({
@@ -1236,7 +1305,9 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           }
           if (isPhoto && done) {
             photoScanDone = true;
-            console.log(`[ScoreDiag] photo-scan-done pool=${photoRawCache.length}`);
+            console.log(
+              `[ScoreDiag] photo-scan-done pool=${photoRawCache.length}`,
+            );
           }
 
           const rawCache = isPhoto ? photoRawCache : videoRawCache;
@@ -1251,7 +1322,9 @@ export const useQueueStore = create<QueueState>((set, get) => ({
               if (!currentDateFilter?.enabled) {
                 pruneCatalogToIds(type, seenIds);
                 if (type === 'photo') {
-                  pruneFeatureCacheFromUris(Array.from(seenIds)).catch(() => {});
+                  pruneFeatureCacheFromUris(Array.from(seenIds)).catch(
+                    () => {},
+                  );
                 }
                 setRawCache(
                   'photo',
@@ -1406,6 +1479,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     if (isPhoto && sort === 'ai') {
       aiFillRunId += 1;
       aiQueuePrimed = false;
+      aiDeckInteractive = false;
+      aiScoresThisFill = 0;
       aiRefillExcludeIds = new Set();
       aiQueueScoreStamp = null;
       set({
@@ -1431,7 +1506,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     );
 
     if (isPhoto) {
-      void (async () => { // eslint-disable-line no-void
+      void (async () => {
+        // eslint-disable-line no-void
         const admitted = await admitLocalPrefix(queue, 0);
         set({
           photoQueue: admitted,
@@ -1480,7 +1556,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     set({
       [indexKey]: index + 1,
       [countKey]: currentCount + 1,
-      [stackKey]: [...currentStack, {type: 'delete', asset, queue: type}],
+      [stackKey]: [...currentStack, { type: 'delete', asset, queue: type }],
       ...reviewStatsPartial(type),
     });
 
@@ -1508,7 +1584,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
     set({
       [indexKey]: index + 1,
-      [stackKey]: [...currentStack, {type: 'keep', asset, queue: type}],
+      [stackKey]: [...currentStack, { type: 'keep', asset, queue: type }],
       ...reviewStatsPartial(type),
     });
 
@@ -1616,7 +1692,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       [isPhoto ? 'photoIndex' : 'videoIndex']: restored.index,
       [stackKey]: newStack,
       ...(lastEntry.type === 'delete'
-        ? {[countKey]: Math.max(0, currentCount - 1)}
+        ? { [countKey]: Math.max(0, currentCount - 1) }
         : {}),
       ...reviewStatsPartial(type),
     });
@@ -1663,6 +1739,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     logScoreDiag('resetAIQueue entry', get);
     aiFillRunId += 1;
     aiQueuePrimed = false;
+    aiDeckInteractive = false;
+    aiScoresThisFill = 0;
     aiRefillExcludeIds = new Set();
     aiQueueScoreStamp = null;
     useAIStore.getState().clearScores();

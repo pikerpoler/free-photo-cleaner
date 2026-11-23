@@ -530,8 +530,21 @@ export function SettingsScreen() {
           </View>
           <ScrollView contentContainerStyle={styles.aboutContent}>
             <Text style={[styles.aboutBody, isDark && styles.textSecondary]}>
-              This is the story of why I made this app and why it is free to use
-              without ads.
+              {`You remember the time when the App Store was full of "free apps" for simple utilities like QR scanners or PDF readers that cost money or bombard you with ads?
+When I had too little storage and I searched for a photo cleaning tool, I got a flashback to that era.
+
+In my mind, cleaning images should be a free utility that comes built in with your image gallery. Until that day I am planning to have this app for free and for everyone to use (it has no server, so the only cost for me is the 100$ a year apple developer subscription, which I have regardless of this app) if you want to support this project, you can buy me a coffee or follow me on github.com/pikerpoler
+
+I even combined this utility with an idea I had during my masters. a personalized AI that learns what I want do delete (not very original, I know) because phones don't have large opus the way it works is like this:
+
+Each image goes through an open source object detection model (YOLOX-Nano) for feature extraction. The features are things like "does this image have a cat?", "How many objects did the model detect?" or "What is the mean confidence of the objects the model detected".
+We also extract features like "is this image a screenshot" or "what is the standard deviation of the pixel values".
+This creates a very small feature set we can save in a dataset, locally stored on the phone. (Unless you explicitly delete it, it survives even after the image is deleted but is small - around 420 bytes per image)
+We now have a tabular dataset! This means we cab train old school ai models on it like decision trees. This type of models can easily be trained on the phon's cpu and they don't need massive amounts of data (for me at around 1000 images I got 75% accuracy)
+
+Now we can use this model to score images and show the best candidates for deletion first!
+
+If you read this far you must be an AI nerd, so stop reading and go to the train AI screen to play around. Make sure to swipe on some images if you actually want a dataset to train on.`}
             </Text>
           </ScrollView>
         </SafeAreaView>
