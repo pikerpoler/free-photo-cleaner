@@ -93,6 +93,7 @@ const DEFAULT_PHOTO_FILTERS: PhotoFilters = {
   screenshots: true,
   whatsapp: true,
   noMetadata: true,
+  everythingElse: true,
   includeICloud: false,
 };
 

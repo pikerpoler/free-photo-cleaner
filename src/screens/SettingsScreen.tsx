@@ -393,6 +393,19 @@ export function SettingsScreen() {
                 }}
               />
             </View>
+            <View style={[styles.row, isDark && styles.rowDark]}>
+              <Text style={[styles.label, isDark && styles.textDark]}>
+                Everything else
+              </Text>
+              <Switch
+                value={photoFilters.everythingElse}
+                onValueChange={v => setPhotoFilters({everythingElse: v})}
+                trackColor={{
+                  false: isDark ? '#39393D' : '#e9e9ea',
+                  true: '#34C759',
+                }}
+              />
+            </View>
           </>
         )}
 

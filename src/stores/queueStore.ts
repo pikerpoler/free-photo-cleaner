@@ -982,6 +982,19 @@ function applyDateFilter(
   );
 }
 
+type PhotoFilterCategory =
+  | 'screenshots'
+  | 'whatsapp'
+  | 'noMetadata'
+  | 'everythingElse';
+
+function photoFilterCategory(asset: MediaAsset): PhotoFilterCategory {
+  if (asset.isScreenshot) return 'screenshots';
+  if (asset.isWhatsApp) return 'whatsapp';
+  if (!asset.hasExif) return 'noMetadata';
+  return 'everythingElse';
+}
+
 function applyPhotoFilters(
   assets: MediaAsset[],
   filters: PhotoFilters,
@@ -989,10 +1002,16 @@ function applyPhotoFilters(
   if (filters.mode === 'all') return assets;
 
   return assets.filter(asset => {
-    if (filters.screenshots && asset.isScreenshot) return true;
-    if (filters.whatsapp && asset.isWhatsApp) return true;
-    if (filters.noMetadata && !asset.hasExif) return true;
-    return false;
+    switch (photoFilterCategory(asset)) {
+      case 'screenshots':
+        return filters.screenshots;
+      case 'whatsapp':
+        return filters.whatsapp;
+      case 'noMetadata':
+        return filters.noMetadata;
+      case 'everythingElse':
+        return filters.everythingElse;
+    }
   });
 }
 

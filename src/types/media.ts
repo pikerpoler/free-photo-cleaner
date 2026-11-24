@@ -34,6 +34,8 @@ export interface PhotoFilters {
   screenshots: boolean;
   whatsapp: boolean;
   noMetadata: boolean;
+  /** Regular library photos: not screenshot, not WhatsApp, has timestamp. */
+  everythingElse: boolean;
   /** When false, iCloud-only originals are kept out of the swipe deck. */
   includeICloud: boolean;
 }
