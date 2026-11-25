@@ -1232,15 +1232,17 @@ export const useQueueStore = create<QueueState>((set, get) => ({
           [queueKey]: [],
           [indexKey]: 0,
           [loadingKey]: true,
-          isScoringPhotos: false,
+          ...(isPhoto ? { isScoringPhotos: false } : {}),
           [loadingMoreKey]: false,
           ...reviewStatsPartial(),
         });
       }
 
       const startProgressiveScan = () => {
-        if (generation !== photoLoadGeneration) return;
-        deferredPhotoScanStart = null;
+        if (isPhoto) {
+          if (generation !== photoLoadGeneration) return;
+          deferredPhotoScanStart = null;
+        }
         beginProgressiveLoad(hydrated.length === 0);
       };
       if (isPhoto && currentPhotoSort === 'ai' && photoPoolReady()) {
@@ -1340,7 +1342,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
               [queueKey]: queue,
               [indexKey]: 0,
               [loadingKey]: false,
-              isScoringPhotos: false,
+              ...(isPhoto ? { isScoringPhotos: false } : {}),
               [loadingMoreKey]: !done,
               ...reviewStatsPartial(),
             });
@@ -1373,7 +1375,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
               [queueKey]: queue,
               [loadingMoreKey]: false,
               [loadingKey]: false,
-              isScoringPhotos: false,
+              ...(isPhoto ? { isScoringPhotos: false } : {}),
               ...reviewStatsPartial(),
             });
             if (isPhoto) refreshPhotoDeck(set, get);
