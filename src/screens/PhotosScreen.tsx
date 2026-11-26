@@ -34,6 +34,7 @@ export function PhotosScreen() {
     applyFilters,
     swipeLeft,
     swipeRight,
+    skipFailedAsset,
     undo,
     flushDeletes,
     photoUndoStack,
@@ -53,6 +54,7 @@ export function PhotosScreen() {
       applyFilters: s.applyFilters,
       swipeLeft: s.swipeLeft,
       swipeRight: s.swipeRight,
+      skipFailedAsset: s.skipFailedAsset,
       undo: s.undo,
       flushDeletes: s.flushDeletes,
       photoUndoStack: s.photoUndoStack,
@@ -74,6 +76,8 @@ export function PhotosScreen() {
   const photoFiltersRef = React.useRef(photoFilters);
   const dateFilterRef = React.useRef(dateFilter);
   const isFirstLoad = React.useRef(true);
+  const loadedPhotoIds = React.useRef(new Set<string>());
+  const [, imageLoadRevision] = React.useReducer(value => value + 1, 0);
 
   useEffect(() => {
     if (isFirstLoad.current) {
@@ -117,14 +121,34 @@ export function PhotosScreen() {
   const nextScore = useAIStore(s =>
     nextId ? s.scoreById[nextId] : undefined,
   );
+  const currentImageLoaded = currentId
+    ? loadedPhotoIds.current.has(currentId)
+    : false;
+
+  const handleImageLoad = useCallback((asset: {id: string}) => {
+    if (loadedPhotoIds.current.has(asset.id)) return;
+    loadedPhotoIds.current.add(asset.id);
+    imageLoadRevision();
+  }, []);
+
+  const handleImageLoadError = useCallback(
+    (asset: {id: string; filename: string}, error: string) => {
+      loadedPhotoIds.current.delete(asset.id);
+      console.warn(
+        `[FreePhotoCleaner] Skipping image that failed to load (${asset.filename}, ${asset.id}): ${error}`,
+      );
+      skipFailedAsset('photo', asset.id);
+    },
+    [skipFailedAsset],
+  );
 
   const handleSwipeLeft = useCallback(() => {
-    swipeLeft('photo');
-  }, [swipeLeft]);
+    if (currentId) swipeLeft('photo', currentId);
+  }, [currentId, swipeLeft]);
 
   const handleSwipeRight = useCallback(() => {
-    swipeRight('photo');
-  }, [swipeRight]);
+    if (currentId) swipeRight('photo', currentId);
+  }, [currentId, swipeRight]);
 
   const handleUndo = useCallback(() => {
     undo('photo');
@@ -224,12 +248,15 @@ export function PhotosScreen() {
         onSwipeLeft={handleSwipeLeft}
         onSwipeRight={handleSwipeRight}
         cardKey={currentAsset.id}
+        enabled={currentImageLoaded}
         behindContent={
           nextAsset ? (
             <MediaCard
               asset={nextAsset}
               showScore={showScores}
               score={nextScore ?? null}
+              onLoad={handleImageLoad}
+              onLoadError={handleImageLoadError}
             />
           ) : undefined
         }>
@@ -237,6 +264,8 @@ export function PhotosScreen() {
           asset={currentAsset}
           showScore={showScores}
           score={currentScore ?? null}
+          onLoad={handleImageLoad}
+          onLoadError={handleImageLoadError}
         />
       </SwipeCard>
 

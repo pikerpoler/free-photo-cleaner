@@ -101,8 +101,10 @@ interface QueueState {
     photoFilters?: PhotoFilters,
     videoFilters?: VideoFilters,
   ) => void;
-  swipeLeft: (type: MediaType) => void;
-  swipeRight: (type: MediaType) => void;
+  swipeLeft: (type: MediaType, expectedAssetId?: string) => void;
+  swipeRight: (type: MediaType, expectedAssetId?: string) => void;
+  /** Remove an asset that could not be rendered without recording a decision. */
+  skipFailedAsset: (type: MediaType, assetId: string) => void;
   undo: (type: MediaType) => void;
   flushDeletes: (type: MediaType) => Promise<void>;
   getCurrentAsset: (type: MediaType) => MediaAsset | null;
@@ -123,6 +125,14 @@ let photoRawCache: MediaAsset[] = [];
 let photoRawIds = new Set<string>();
 let videoRawCache: MediaAsset[] = [];
 let videoRawIds = new Set<string>();
+
+/** Assets that failed to render stay excluded for the rest of this app session. */
+const failedPhotoIds = new Set<string>();
+const failedVideoIds = new Set<string>();
+
+function failedIdsFor(type: MediaType): Set<string> {
+  return type === 'photo' ? failedPhotoIds : failedVideoIds;
+}
 
 let currentPhotoSort: SortMode = 'ai';
 let currentVideoSort: SortMode = 'largest_first';
@@ -351,7 +361,10 @@ function filterEligible(
   );
   const keptIds = getKeptAssetIds();
   const pendingIds = getPendingDeleteIds();
-  return matched.filter(a => !keptIds.has(a.id) && !pendingIds.has(a.id));
+  const failedIds = failedIdsFor(type);
+  return matched.filter(
+    a => !keptIds.has(a.id) && !pendingIds.has(a.id) && !failedIds.has(a.id),
+  );
 }
 
 /** Eligible for the swipe deck. iCloud-only originals stay in To review stats. */
@@ -1509,13 +1522,13 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     });
   },
 
-  swipeLeft: (type: MediaType) => {
+  swipeLeft: (type: MediaType, expectedAssetId?: string) => {
     const state = get();
     const queue = type === 'photo' ? state.photoQueue : state.videoQueue;
     const index = type === 'photo' ? state.photoIndex : state.videoIndex;
     const asset = queue[index];
 
-    if (!asset) return;
+    if (!asset || (expectedAssetId && asset.id !== expectedAssetId)) return;
 
     const indexKey = type === 'photo' ? 'photoIndex' : 'videoIndex';
     const countKey =
@@ -1548,13 +1561,13 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     }
   },
 
-  swipeRight: (type: MediaType) => {
+  swipeRight: (type: MediaType, expectedAssetId?: string) => {
     const state = get();
     const queue = type === 'photo' ? state.photoQueue : state.videoQueue;
     const index = type === 'photo' ? state.photoIndex : state.videoIndex;
     const asset = queue[index];
 
-    if (!asset) return;
+    if (!asset || (expectedAssetId && asset.id !== expectedAssetId)) return;
 
     const indexKey = type === 'photo' ? 'photoIndex' : 'videoIndex';
     const stackKey = type === 'photo' ? 'photoUndoStack' : 'videoUndoStack';
@@ -1571,6 +1584,36 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
     if (type === 'photo') {
       captureTrainingExample(asset.id, asset.uri, 0);
+      maybeRefillAIQueue(set, get);
+      refreshPhotoDeck(set, get);
+    }
+  },
+
+  skipFailedAsset: (type: MediaType, assetId: string) => {
+    const failedIds = failedIdsFor(type);
+    if (failedIds.has(assetId)) return;
+    failedIds.add(assetId);
+
+    const state = get();
+    const isPhoto = type === 'photo';
+    const queue = isPhoto ? state.photoQueue : state.videoQueue;
+    const index = isPhoto ? state.photoIndex : state.videoIndex;
+    const failedIndex = queue.findIndex(asset => asset.id === assetId);
+    const nextQueue = queue.filter(asset => asset.id !== assetId);
+    const removedBeforeCurrent = failedIndex >= 0 && failedIndex < index;
+    const nextIndex = Math.min(
+      Math.max(0, index - (removedBeforeCurrent ? 1 : 0)),
+      nextQueue.length,
+    );
+
+    set({
+      [isPhoto ? 'photoQueue' : 'videoQueue']: nextQueue,
+      [isPhoto ? 'photoIndex' : 'videoIndex']: nextIndex,
+      ...reviewStatsPartial(type),
+    });
+
+    if (isPhoto) {
+      useAIStore.getState().clearScoresForIds([assetId]);
       maybeRefillAIQueue(set, get);
       refreshPhotoDeck(set, get);
     }

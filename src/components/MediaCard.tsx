@@ -8,10 +8,18 @@ interface MediaCardProps {
   /** Reserve the AI score slot so the strip doesn't reflow while scoring. */
   showScore?: boolean;
   score?: number | null;
+  onLoad?: (asset: MediaAsset) => void;
+  onLoadError?: (asset: MediaAsset, error: string) => void;
 }
 
 export const MediaCard = React.memo(
-  function MediaCard({asset, showScore = false, score}: MediaCardProps) {
+  function MediaCard({
+    asset,
+    showScore = false,
+    score,
+    onLoad,
+    onLoadError,
+  }: MediaCardProps) {
     return (
       <View style={styles.container}>
         <Image
@@ -19,6 +27,10 @@ export const MediaCard = React.memo(
           style={styles.image}
           source={{uri: asset.uri}}
           resizeMode="contain"
+          onLoad={() => onLoad?.(asset)}
+          onError={event =>
+            onLoadError?.(asset, event.nativeEvent.error || 'Unknown error')
+          }
         />
         <View style={styles.metadataStrip}>
           <Text style={styles.metaText}>{formatDate(asset.creationDate)}</Text>
@@ -43,7 +55,9 @@ export const MediaCard = React.memo(
   (prev, next) =>
     prev.asset.id === next.asset.id &&
     prev.showScore === next.showScore &&
-    prev.score === next.score,
+    prev.score === next.score &&
+    prev.onLoad === next.onLoad &&
+    prev.onLoadError === next.onLoadError,
 );
 
 const styles = StyleSheet.create({

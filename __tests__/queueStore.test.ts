@@ -3,6 +3,8 @@ import type {OnBatchLoaded} from '../src/services/media';
 
 const mockLoadMediaProgressively = jest.fn();
 const mockGetCatalogAssets = jest.fn();
+const mockAddPendingDelete = jest.fn();
+const mockMarkAssetKept = jest.fn();
 
 jest.mock('../src/services/media', () => ({
   loadMediaProgressively: (...args: unknown[]) =>
@@ -18,10 +20,10 @@ jest.mock('../src/services/nativeStorage', () => ({
 
 jest.mock('../src/services/database', () => ({
   getKeptAssetIds: jest.fn(() => new Set<string>()),
-  markAssetKept: jest.fn(),
+  markAssetKept: (...args: unknown[]) => mockMarkAssetKept(...args),
   removeAssetFromKept: jest.fn(),
   getPendingDeletesByType: jest.fn(() => []),
-  addPendingDelete: jest.fn(),
+  addPendingDelete: (...args: unknown[]) => mockAddPendingDelete(...args),
   removePendingDelete: jest.fn(),
   clearPendingDeletesByType: jest.fn(),
   getPendingDeleteIds: jest.fn(() => new Set<string>()),
@@ -133,5 +135,69 @@ describe('queueStore video loading after photo load', () => {
 
     callbacks.get('video')?.([makeAsset('ph://video-2', 'video')], true);
     expect(useQueueStore.getState().isScoringPhotos).toBe(true);
+  });
+});
+
+describe('queueStore failed image handling', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    useQueueStore.setState({
+      photoQueue: [],
+      photoIndex: 0,
+      photoPendingCount: 0,
+      photoUndoStack: [],
+    });
+  });
+
+  test('removes a failed current photo without keeping or deleting it', () => {
+    const failed = makeAsset('ph://failed-current', 'photo');
+    const next = makeAsset('ph://next-after-failure', 'photo');
+    useQueueStore.setState({photoQueue: [failed, next], photoIndex: 0});
+
+    useQueueStore.getState().skipFailedAsset('photo', failed.id);
+
+    const state = useQueueStore.getState();
+    expect(state.photoQueue.map(asset => asset.id)).toEqual([next.id]);
+    expect(state.photoIndex).toBe(0);
+    expect(state.photoUndoStack).toHaveLength(0);
+    expect(state.photoPendingCount).toBe(0);
+    expect(mockAddPendingDelete).not.toHaveBeenCalled();
+    expect(mockMarkAssetKept).not.toHaveBeenCalled();
+  });
+
+  test('removes a failed preloaded photo without moving the current photo', () => {
+    const current = makeAsset('ph://current-before-failure', 'photo');
+    const failedNext = makeAsset('ph://failed-next', 'photo');
+    const after = makeAsset('ph://after-failed-next', 'photo');
+    useQueueStore.setState({
+      photoQueue: [current, failedNext, after],
+      photoIndex: 0,
+    });
+
+    useQueueStore.getState().skipFailedAsset('photo', failedNext.id);
+
+    const state = useQueueStore.getState();
+    expect(state.photoQueue.map(asset => asset.id)).toEqual([
+      current.id,
+      after.id,
+    ]);
+    expect(state.photoIndex).toBe(0);
+    expect(state.getCurrentAsset('photo')?.id).toBe(current.id);
+    expect(mockAddPendingDelete).not.toHaveBeenCalled();
+    expect(mockMarkAssetKept).not.toHaveBeenCalled();
+  });
+
+  test('ignores a stale swipe callback for an image that was skipped', () => {
+    const failed = makeAsset('ph://failed-during-gesture', 'photo');
+    const next = makeAsset('ph://gesture-next', 'photo');
+    useQueueStore.setState({photoQueue: [failed, next], photoIndex: 0});
+
+    useQueueStore.getState().skipFailedAsset('photo', failed.id);
+    useQueueStore.getState().swipeLeft('photo', failed.id);
+    useQueueStore.getState().swipeRight('photo', failed.id);
+
+    expect(useQueueStore.getState().getCurrentAsset('photo')?.id).toBe(next.id);
+    expect(mockAddPendingDelete).not.toHaveBeenCalled();
+    expect(mockMarkAssetKept).not.toHaveBeenCalled();
   });
 });
